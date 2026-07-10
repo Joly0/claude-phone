@@ -250,6 +250,7 @@ function checkReadyState() {
     });
 
     console.log("[" + new Date().toISOString() + "] SIP INVITE handler registered");
+    console.log("[" + new Date().toISOString() + "] Default voice provider: " + (process.env.VOICE_PROVIDER || "gemini"));
     console.log("[" + new Date().toISOString() + "] Multi-extension voice interface ready!");
   }
 }

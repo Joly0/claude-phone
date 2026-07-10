@@ -174,10 +174,11 @@ function getAvailableVoices() {
 // Initialize audio directory
 setAudioDir(audioDir);
 
-// Setup periodic cleanup (every 30 minutes)
+// Setup periodic cleanup (every 30 minutes); unref so this timer alone
+// never keeps a process alive
 setInterval(() => {
   cleanupOldFiles();
-}, 30 * 60 * 1000);
+}, 30 * 60 * 1000).unref();
 
 module.exports = {
   generateSpeech,

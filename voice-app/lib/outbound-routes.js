@@ -10,8 +10,7 @@ const router = express.Router();
 const logger = require('./logger');
 const { OutboundSession, getSession, getAllSessions } = require('./outbound-session');
 const { initiateOutboundCall, playMessage, hangupCall } = require('./outbound-handler');
-const providers = require('./providers');
-const { runRealtimeVoiceLoop } = require('./realtime-voice-loop');
+const { runVoicePipeline } = require('./voice-pipeline');
 
 // Dependencies injected via setupRoutes()
 var srf = null;
@@ -242,7 +241,7 @@ router.post('/outbound-call', async function(req, res) {
           session.transition('CONVERSING');
 
           try {
-            await runRealtimeVoiceLoop(providers.get('gemini'), endpoint, dialog, callId, {
+            await runVoicePipeline(endpoint, dialog, callId, {
               audioForkServer: audioForkServer,
               wsPort: wsPort,
               deviceConfig: deviceConfig,

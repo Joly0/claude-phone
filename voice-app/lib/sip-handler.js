@@ -2,8 +2,7 @@
  * SIP Call Handler with realtime voice conversation loop
  */
 
-const providers = require('./providers');
-const { runRealtimeVoiceLoop } = require('./realtime-voice-loop');
+const { runVoicePipeline } = require('./voice-pipeline');
 
 function extractCallerId(req) {
   var from = req.get("From") || "";
@@ -114,8 +113,8 @@ async function handleInvite(req, res, options) {
       if (endpoint) endpoint.destroy().catch(function() {});
     });
 
-    // Run the realtime voice loop with OpenClaw relay
-    await runRealtimeVoiceLoop(providers.get('gemini'), endpoint, dialog, callUuid, {
+    // Run the configured voice pipeline (VOICE_PROVIDER / device provider field)
+    await runVoicePipeline(endpoint, dialog, callUuid, {
       audioForkServer: options.audioForkServer,
       wsPort: options.wsPort,
       deviceConfig: deviceConfig,
