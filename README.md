@@ -25,6 +25,7 @@ This fork replaces the original ElevenLabs/Whisper pipeline with pluggable **rea
   - Custom DNS server support (`DNS_SERVER`) for providers whose SRV records only resolve through the local router's DNS
   - Split public/LAN addressing (`PUBLIC_IP` vs `EXTERNAL_IP`) for servers behind NAT
   - Compatibility fixes for strict carriers: provisional 180 Ringing before answering, explicit codec offers (G722, PCMA, PCMU), and E.164 numbers with a leading plus
+- **Automatic public IP detection** for dynamic IP connections: set `PUBLIC_IP=auto` and the current public address is detected at startup and re-checked periodically (`PUBLIC_IP_CHECK_INTERVAL`, default 300s). On a change, all extensions re-register immediately with the new address and the FreeSWITCH advertised RTP address is refreshed via a Sofia profile restart (FreeSWITCH resolves it via STUN in auto mode). Calls that are active at the moment the ISP swaps the address still drop, since the old address stops existing; if audio stays broken afterwards, `docker compose restart` recovers everything
 - **Native 24kHz audio** streamed back over the bidirectional audio fork with real-time pacing, instead of downsampled 8kHz file playback
 - **Local voice activity barge-in**: interrupt the assistant mid-sentence without waiting for the server-side interruption signal
 - **Configurable voice prompts** via `voice-app/config/prompts.json` (see [Voice Prompts](#voice-prompts))
