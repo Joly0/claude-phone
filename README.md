@@ -30,6 +30,7 @@ This fork replaces the original ElevenLabs/Whisper pipeline with pluggable **rea
 - **Local voice activity barge-in**: interrupt the assistant mid-sentence without waiting for the server-side interruption signal
 - **Configurable voice prompts** via `voice-app/config/prompts.json` (see [Voice Prompts](#voice-prompts))
 - **Two conversation modes** with mid-call switching: *direct mode* (default, the voice provider answers natively for sub-second responses) and *relay mode* (an AI backend provides the answers and the voice provider speaks them)
+- **Assistant-initiated hangup**: the model can end the call itself via an `end_call` tool in direct mode, and a relay backend can end it by including `[HANGUP]` in its reply. The farewell finishes playing before the call is torn down. Disable per extension with `"allowHangup": false` in `devices.json`
 - **Claude API bridge fallback**: calls work out of the box with the bundled claude-api-server when no OpenClaw route is configured
 
 ## Prerequisites

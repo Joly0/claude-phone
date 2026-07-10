@@ -5,6 +5,7 @@
     "authId": "your-3cx-auth-id",
     "password": "your-3cx-password",
     "provider": "gemini",
+    "allowHangup": true,
     "voiceId": "Kore",
     "prompt": "You are a voice relay interface. Listen to the user silently. When you receive text, speak it naturally."
   },

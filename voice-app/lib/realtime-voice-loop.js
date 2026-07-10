@@ -32,6 +32,34 @@ var STATE_SPEAKING = 'SPEAKING';
 var DIRECT_MODE_TRIGGERS = ['direct mode', 'fast mode', 'quick mode', 'מצב ישיר', 'מצב מהיר'];
 var RELAY_MODE_TRIGGERS = ['brain mode', 'smart mode', 'clawdbot', 'מצב מלא', 'מצב חכם'];
 
+// Tool offered to the model in direct mode so it can end the call itself
+var END_CALL_TOOL = {
+  name: 'end_call',
+  description: 'End the phone call. Use this when the conversation is finished, ' +
+    'the caller says goodbye, or the caller asks you to hang up. ' +
+    'Say a short farewell before calling this.'
+};
+
+// Marker a relay backend can include in its reply to end the call
+var HANGUP_MARKER = /\[HANGUP\]/gi;
+
+/**
+ * Detect and strip the [HANGUP] marker from a relay backend response.
+ * @param {string} text
+ * @returns {{ text: string, hangup: boolean }}
+ */
+function extractHangupMarker(text) {
+  if (typeof text !== 'string' || !HANGUP_MARKER.test(text)) {
+    HANGUP_MARKER.lastIndex = 0;
+    return { text: text, hangup: false };
+  }
+  HANGUP_MARKER.lastIndex = 0;
+  return {
+    text: text.replace(HANGUP_MARKER, '').replace(/\s{2,}/g, ' ').trim(),
+    hangup: true
+  };
+}
+
 function checkModeTrigger(transcript) {
   var lower = transcript.toLowerCase().trim();
   for (var i = 0; i < DIRECT_MODE_TRIGGERS.length; i++) {
@@ -128,6 +156,37 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
   var queryInProgress = false;
   var queryDebounceTimer = null;
   var directMode = true;
+
+  // Assistant-initiated hangup (end_call tool / [HANGUP] relay marker)
+  var allowHangup = !deviceConfig || deviceConfig.allowHangup !== false;
+  var hangupRequested = false;
+  var hangupTimer = null;
+
+  function doHangup() {
+    if (!callActive) return;
+    logger.info('Assistant ended the call', { callUuid: callUuid });
+    dialog.destroy().catch(function() {});
+  }
+
+  function requestHangup() {
+    if (hangupRequested) return;
+    hangupRequested = true;
+    // Safety net: hang up even if the farewell never finishes cleanly
+    hangupTimer = setTimeout(doHangup, 10000);
+  }
+
+  // Hang up once the farewell audio has fully drained to the caller
+  function maybeFinishHangup() {
+    if (!hangupRequested || !callActive) return;
+    if (state === STATE_SPEAKING) return;
+    if (audioQueue.length > 0 || audioDraining) return;
+    if (hangupTimer) {
+      clearTimeout(hangupTimer);
+      hangupTimer = null;
+    }
+    // Small grace period for the last buffered audio to play out
+    setTimeout(doHangup, 1000);
+  }
 
   var audioAccumulator = Buffer.alloc(0);
   var isPlaying = false;
@@ -237,7 +296,15 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
         if (!callActive) { queryInProgress = false; return; }
 
         logger.info('AI responded', { callUuid: callUuid, response: response });
-        session.sendText(response);
+
+        // The relay backend can end the call with a [HANGUP] marker
+        var hangupCheck = extractHangupMarker(response);
+        if (hangupCheck.hangup && allowHangup) {
+          logger.info('Relay backend requested hangup', { callUuid: callUuid });
+          requestHangup();
+        }
+
+        session.sendText(hangupCheck.text || 'Goodbye!');
         state = STATE_SPEAKING;
         queryInProgress = false;
 
@@ -269,7 +336,8 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
     // 1. Connect the realtime voice session
     session = provider.createSession({
       systemPrompt: systemPrompt,
-      voiceName: voiceId
+      voiceName: voiceId,
+      tools: allowHangup ? [END_CALL_TOOL] : undefined
     });
 
     try {
@@ -407,6 +475,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
           audioQueue.length = 0;
           audioSendStart = null;
           audioBytesSent = 0;
+          maybeFinishHangup();
           return;
         }
 
@@ -432,6 +501,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
             setImmediate(sendNext);
           } else {
             audioDraining = false;
+            maybeFinishHangup();
           }
         }
       }
@@ -480,6 +550,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
             fireOpenClawQuery();
           }
         }
+        maybeFinishHangup();
 
       } else if (state === STATE_SPEAKING) {
         // Provider finished speaking — flush remaining audio
@@ -494,6 +565,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
         logger.info('Provider finished speaking, switching to listening', { callUuid: callUuid });
         state = STATE_LISTENING;
         inputTranscriptBuffer = '';
+        maybeFinishHangup();
       }
     });
 
@@ -511,17 +583,34 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
       inputTranscriptBuffer = '';
     });
 
-    // 9. Handle provider errors
+    // 9. Handle model tool calls (end_call)
+    session.on('toolCall', function(call) {
+      if (call.name === 'end_call' && allowHangup) {
+        logger.info('Model requested hangup via end_call', { callUuid: callUuid });
+        if (typeof session.sendToolResponse === 'function') {
+          session.sendToolResponse(call.id, call.name, { result: 'ok, ending the call' });
+        }
+        requestHangup();
+        maybeFinishHangup();
+      } else {
+        logger.warn('Unhandled tool call', { callUuid: callUuid, name: call.name });
+        if (typeof session.sendToolResponse === 'function') {
+          session.sendToolResponse(call.id, call.name, { error: 'unknown tool' });
+        }
+      }
+    });
+
+    // 10. Handle provider errors
     session.on('error', function(err) {
       logger.error('Realtime voice error', { callUuid: callUuid, provider: provider.name, error: err.message });
     });
 
-    // 10. Log what the provider speaks
+    // 11. Log what the provider speaks
     session.on('transcript', function(text) {
       logger.info('Provider spoke', { callUuid: callUuid, text: text });
     });
 
-    // 11. Wait for call to end
+    // 12. Wait for call to end
     await new Promise(function(resolve) {
       dialog.once('destroy', function() {
         callActive = false;
@@ -573,6 +662,11 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
       queryDebounceTimer = null;
     }
 
+    if (hangupTimer) {
+      clearTimeout(hangupTimer);
+      hangupTimer = null;
+    }
+
     if (session) {
       try { session.close(); } catch (e) {}
     }
@@ -587,4 +681,4 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
   }
 }
 
-module.exports = { runRealtimeVoiceLoop };
+module.exports = { runRealtimeVoiceLoop, extractHangupMarker };
