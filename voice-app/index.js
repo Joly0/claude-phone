@@ -141,6 +141,11 @@ srf.on("connect", async function(err, hostport) {
 
     // Register all devices from config
     registrar.registerAll(deviceRegistry.getRegistrationConfigs());
+  } else {
+    // Reconnected: REGISTERs in flight on the old connection are gone and
+    // never scheduled a refresh, so re-register everything now (picking up
+    // a possibly changed public IP as well)
+    registrar.reregisterAll(localAddress);
   }
 
   checkReadyState();

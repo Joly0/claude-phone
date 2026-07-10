@@ -57,24 +57,39 @@ class MultiRegistrar {
   }
 
   /**
-   * Switch to a new local (public) address and re-register all devices
-   * immediately so their Contact headers point at the new IP.
+   * Re-register every known device immediately, optionally switching to a
+   * new local (public) address first. Used when the public IP changes and
+   * when the drachtio connection is re-established (in-flight REGISTERs die
+   * with the connection, and without a response no refresh/retry timer ever
+   * gets scheduled).
    */
-  updateLocalAddress(newAddress) {
-    if (!newAddress || newAddress === this.baseConfig.local_address) return;
+  reregisterAll(localAddress) {
+    if (localAddress && localAddress !== this.baseConfig.local_address) {
+      console.log('[MULTI-REGISTRAR] Local address changed to ' + localAddress);
+      this.baseConfig.local_address = localAddress;
+      this.deviceConfigs.forEach(function(entry) {
+        entry.config.local_address = localAddress;
+      });
+    }
 
-    console.log('[MULTI-REGISTRAR] Local address changed to ' + newAddress + ', re-registering all devices');
-    this.baseConfig.local_address = newAddress;
-
+    console.log('[MULTI-REGISTRAR] Re-registering ' + this.deviceConfigs.size + ' devices');
     const self = this;
     this.deviceConfigs.forEach(function(entry, key) {
-      entry.config.local_address = newAddress;
       if (self.timers.has(key)) {
         clearTimeout(self.timers.get(key));
         self.timers.delete(key);
       }
       self.resolveAndRegister(entry.device, entry.config);
     });
+  }
+
+  /**
+   * Switch to a new local (public) address and re-register all devices
+   * immediately so their Contact headers point at the new IP.
+   */
+  updateLocalAddress(newAddress) {
+    if (!newAddress || newAddress === this.baseConfig.local_address) return;
+    this.reregisterAll(newAddress);
   }
 
   /**
