@@ -75,7 +75,11 @@ services:
     # - 30000-30100: RTP Audio (changed from 20000-20100 to avoid conflict with 3CX SBC)
 
   claude-api-server:
-    build: ./claude-api-server
+    build:
+      # The Dockerfile copies from claude-api-server/, so the build
+      # context must be the repository root
+      context: .
+      dockerfile: ./claude-api-server/Dockerfile
     container_name: claude-api-server
     restart: unless-stopped
     network_mode: host
