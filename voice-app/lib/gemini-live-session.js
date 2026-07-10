@@ -115,6 +115,9 @@ class GeminiLiveSession extends EventEmitter {
 
         if (this.tools) {
           setupMsg.setup.tools = [{ functionDeclarations: this.tools }];
+          logger.info('Gemini Live setup includes tools', {
+            tools: this.tools.map(function(t) { return t.name; })
+          });
         }
 
         ws.send(JSON.stringify(setupMsg));

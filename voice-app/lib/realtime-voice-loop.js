@@ -35,9 +35,10 @@ var RELAY_MODE_TRIGGERS = ['brain mode', 'smart mode', 'clawdbot', 'מצב מל�
 // Tool offered to the model in direct mode so it can end the call itself
 var END_CALL_TOOL = {
   name: 'end_call',
-  description: 'End the phone call. Use this when the conversation is finished, ' +
-    'the caller says goodbye, or the caller asks you to hang up. ' +
-    'Say a short farewell before calling this.'
+  description: 'Hang up the phone call. You MUST call this immediately after ' +
+    'saying your farewell whenever the caller says goodbye, ends the ' +
+    'conversation, or asks you to hang up. Never say goodbye without also ' +
+    'calling this tool.'
 };
 
 // Marker a relay backend can include in its reply to end the call
