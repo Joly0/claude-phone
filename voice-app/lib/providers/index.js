@@ -26,9 +26,11 @@
  */
 
 var geminiLive = require('./gemini-live');
+var openaiRealtime = require('./openai-realtime');
 
 var registry = {
-  gemini: geminiLive.descriptor
+  gemini: geminiLive.descriptor,
+  openai: openaiRealtime.descriptor
 };
 
 /**
