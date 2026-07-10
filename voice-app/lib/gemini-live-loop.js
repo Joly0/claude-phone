@@ -115,6 +115,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
   var flushTimer = null;
   var state = STATE_LISTENING;
   var bargedIn = false;
+  var greetingActive = false;
   var inputTranscriptBuffer = '';
   var queryInProgress = false;
   var queryDebounceTimer = null;
@@ -275,6 +276,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
     if (!skipGreeting && callActive) {
       session.sendText(directMode ? greetingText : 'Hello! How can I help you?');
       state = STATE_SPEAKING;
+      greetingActive = true;
       logger.info('Greeting sent to Gemini', { callUuid: callUuid });
     }
 
@@ -315,6 +317,28 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
     try {
       audioSession = await sessionPromise;
       logger.info('Audio fork connected', { callUuid: callUuid });
+
+      // Instant barge-in: stop sending audio the moment caller speaks
+      var bargeInTimer = null;
+      audioSession.on('speechStart', function() {
+        if (state === STATE_SPEAKING && !greetingActive) {
+          // Wait 300ms of sustained speech before flushing, avoids "hm", breaths, etc.
+          bargeInTimer = setTimeout(function() {
+            bargeInTimer = null;
+            if (state === STATE_SPEAKING) {
+              logger.info('Local VAD barge-in', { callUuid: callUuid });
+              endpoint.api('uuid_audio_fork', endpoint.uuid + ' stop_play').catch(function() {});
+            }
+          }, 300);
+        }
+      });
+      // Cancel pending barge-in if speech stops quickly
+      // (speech too short to be a real interruption)
+      var origResetUtterance = audioSession._resetUtterance.bind(audioSession);
+      audioSession._resetUtterance = function() {
+        if (bargeInTimer) { clearTimeout(bargeInTimer); bargeInTimer = null; }
+        origResetUtterance();
+      };
     } catch (err) {
       logger.warn('Audio fork session failed', { callUuid: callUuid, error: err.message });
       if (audioForkServer.cancelExpectation) {
@@ -423,6 +447,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
     // 7. Handle turnComplete
     session.on('turnComplete', function() {
       bargedIn = false;
+      greetingActive = false;
       if (state === STATE_LISTENING) {
         if (directMode) {
           // In direct mode, only check for mode switch back to relay

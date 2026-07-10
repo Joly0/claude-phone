@@ -103,6 +103,7 @@ class AudioForkSession extends EventEmitter {
 
   _startUtteranceWithPreRoll() {
     this._inSpeech = true;
+    this.emit('speechStart');
     this._utteranceChunks = [];
     this._utteranceBytes = 0;
     this._speechBytes = 0;
@@ -124,6 +125,7 @@ class AudioForkSession extends EventEmitter {
 
   _resetUtterance() {
     this._inSpeech = false;
+    this._speechFrameCount = 0;
     this._utteranceChunks = [];
     this._utteranceBytes = 0;
     this._speechBytes = 0;
@@ -183,8 +185,8 @@ class AudioForkSession extends EventEmitter {
     if (!this._pcmEndian) this._pcmEndian = this._detectEndian(buf);
     const stats = pcmStats(buf, this._pcmEndian);
 
-    const rmsThreshold = 650;
-    const maxThreshold = 2200;
+    const rmsThreshold = 800;
+    const maxThreshold = 3000;
 
     const looksSilent = stats.nearZeroRatio > 0.94 && stats.rms < rmsThreshold;
     if (looksSilent) return false;
@@ -242,7 +244,9 @@ class AudioForkSession extends EventEmitter {
 
     if (!this._inSpeech) {
       this._rememberPreRoll(data);
-      if (!isSpeech) return;
+      if (!isSpeech) { this._speechFrameCount = 0; return; }
+      this._speechFrameCount = (this._speechFrameCount || 0) + 1;
+      if (this._speechFrameCount < 3) return; // Need 3 consecutive speech frames (~60ms)
       this._startUtteranceWithPreRoll();
     }
 
