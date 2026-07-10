@@ -19,6 +19,7 @@ var logger = require('./logger');
 var GeminiLiveSession = require('./gemini-live-session').GeminiLiveSession;
 var openclawBridge = require('./openclaw-bridge');
 var openclawConfig = require('./openclaw-config');
+var claudeBridge = require('./claude-bridge');
 
 var MEDIA_HOST = process.env.MEDIA_HOST;
 var HTTP_PORT = process.env.HTTP_PORT || 3000;
@@ -88,14 +89,14 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
 
   var audioDir = process.env.AUDIO_DIR || '/tmp/voice-audio';
 
-  // Look up OpenClaw route for this caller
+  // Look up OpenClaw route for this caller, fall back to Claude API bridge
   var openclawRoute = openclawConfig.getRouteForCaller(callerExtension);
   if (!openclawRoute) {
     openclawRoute = openclawConfig.getDefault();
   }
-  if (!openclawRoute) {
-    logger.error('No OpenClaw config for caller', { callUuid: callUuid, callerExtension: callerExtension });
-    return { success: false, error: 'No OpenClaw config for caller ' + callerExtension };
+  var useClaudeBridge = !openclawRoute;
+  if (useClaudeBridge) {
+    logger.info('No OpenClaw config, using Claude API bridge', { callUuid: callUuid, callerExtension: callerExtension });
   }
 
   // Validate Google API key
@@ -205,17 +206,26 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
 
     (async function() {
       try {
-        var response = await openclawBridge.query(transcript, openclawRoute);
+        var response;
+        if (useClaudeBridge) {
+          response = await claudeBridge.query(transcript, {
+            callId: callUuid,
+            devicePrompt: deviceConfig ? deviceConfig.prompt : null,
+            callerExtension: callerExtension
+          });
+        } else {
+          response = await openclawBridge.query(transcript, openclawRoute);
+        }
 
         if (!callActive) { queryInProgress = false; return; }
 
-        logger.info('OpenClaw responded', { callUuid: callUuid, response: response });
+        logger.info('AI responded', { callUuid: callUuid, response: response });
         session.sendText(response);
         state = STATE_SPEAKING;
         queryInProgress = false;
 
       } catch (err) {
-        logger.error('OpenClaw query failed', { callUuid: callUuid, error: err.message });
+        logger.error('AI query failed', { callUuid: callUuid, error: err.message });
         if (callActive) {
           session.sendText(err.message);
           state = STATE_SPEAKING;
@@ -232,7 +242,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
       hasInitialContext: !!initialContext,
       voiceId: voiceId,
       callerExtension: callerExtension,
-      openclawUrl: openclawRoute.url,
+      backend: useClaudeBridge ? 'claude-api' : openclawRoute.url,
       directMode: false
     });
 
