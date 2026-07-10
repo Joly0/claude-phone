@@ -1,6 +1,5 @@
 /**
- * SIP Call Handler with OpenClaw Relay via Gemini Live
- * v13: OpenClaw relay integration - all calls routed through Gemini Live
+ * SIP Call Handler with Gemini Live conversation loop
  */
 
 const { runGeminiLiveLoop } = require('./gemini-live-loop');
@@ -19,7 +18,7 @@ function extractCallerId(req) {
  */
 function extractDialedExtension(req) {
   var to = req.get("To") || "";
-  var match = to.match(/sip:(\d+)@/);
+  var match = to.match(/sip:([+\d]+)@/);
   if (match) {
     return match[1];
   }
@@ -91,7 +90,19 @@ async function handleInvite(req, res, options) {
       console.log('[' + new Date().toISOString() + '] CALL Stripped video track from SDP');
     }
 
-    const result = await mediaServer.connectCaller(req, res, { remoteSdp: audioOnlySdp });
+    // Send 180 Ringing before connecting to FreeSWITCH
+    // Some SIP trunk carriers need a provisional response to set up
+    // dialog state before they accept the 200 OK
+    res.send(180, { headers: { 'Supported': 'timer' } });
+
+    const result = await mediaServer.connectCaller(req, res, {
+      remoteSdp: audioOnlySdp,
+      codecs: ['G722', 'PCMA', 'PCMU'],
+      headers: {
+        'Supported': 'timer',
+        'Contact': '<sip:' + (process.env.PUBLIC_IP || process.env.EXTERNAL_IP) + ':' + (process.env.DRACHTIO_SIP_PORT || '5060') + ';transport=tcp>'
+      }
+    });
     const { endpoint, dialog } = result;
     const callUuid = endpoint.uuid;
 
