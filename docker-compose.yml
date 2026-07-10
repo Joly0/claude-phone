@@ -25,16 +25,30 @@ services:
             -days 3650 -nodes -subj "/CN=drachtio" 2>/dev/null
           cp /etc/drachtio/tls/server.crt /etc/drachtio/tls/chain.pem
         fi
+        # PUBLIC_IP=auto: resolve the current public IP at container start
+        PUBLIC_IP="$${PUBLIC_IP:-$$EXTERNAL_IP}"
+        if [ "$$PUBLIC_IP" = "auto" ]; then
+          PUBLIC_IP=$$(wget -qO- -T 5 https://api.ipify.org 2>/dev/null || curl -sf -m 5 https://api.ipify.org 2>/dev/null || true)
+          if [ -z "$$PUBLIC_IP" ]; then
+            echo "Public IP detection failed, using EXTERNAL_IP $$EXTERNAL_IP"
+            PUBLIC_IP="$$EXTERNAL_IP"
+          else
+            echo "Detected public IP: $$PUBLIC_IP"
+          fi
+        fi
         exec drachtio \
           --contact "sip:*:${DRACHTIO_SIP_PORT:-5060};transport=tcp,udp" \
           --contact "sips:*:${DRACHTIO_TLS_PORT:-5061};transport=tls" \
           --cert-file /etc/drachtio/tls/server.crt \
           --key-file /etc/drachtio/tls/server.key \
           --chain-file /etc/drachtio/tls/chain.pem \
-          --external-ip ${PUBLIC_IP:-${EXTERNAL_IP}} \
+          --external-ip $$PUBLIC_IP \
           --secret ${DRACHTIO_SECRET:-cymru} \
           --port 9022 \
           --loglevel info
+    environment:
+      - EXTERNAL_IP=${EXTERNAL_IP}
+      - PUBLIC_IP=${PUBLIC_IP:-${EXTERNAL_IP}}
     volumes:
       # Persist auto-generated TLS cert across restarts
       - drachtio-tls:/etc/drachtio/tls
@@ -57,6 +71,13 @@ services:
         # SIP trunk delivers calls from outside the LAN.
         sed -i '/<param name="apply-nat-acl"/a \      <param name="local-network-acl" value="loopback.auto"/>' \
           /usr/local/freeswitch/conf/sip_profiles/mrf.xml
+        # PUBLIC_IP=auto: let FreeSWITCH resolve its public address via STUN.
+        # STUN is re-resolved whenever the Sofia profile restarts, which the
+        # voice-app triggers when it detects a public IP change.
+        if [ "$${PUBLIC_IP}" = "auto" ]; then
+          PUBLIC_IP="stun:stun.freeswitch.org"
+          echo "PUBLIC_IP=auto: advertising RTP address via STUN"
+        fi
         exec /entrypoint.sh freeswitch \
           --sip-port 5080 \
           --rtp-range-start 30000 \
