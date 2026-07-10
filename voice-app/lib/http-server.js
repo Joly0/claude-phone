@@ -19,7 +19,7 @@ const CLEANUP_INTERVAL = 120000;
 // File max age: 10 minutes
 const FILE_MAX_AGE = 600000;
 
-const MEDIA_HOST = process.env.MEDIA_HOST;
+const MEDIA_HOST = require('./media-host');
 
 /**
  * Create HTTP Server

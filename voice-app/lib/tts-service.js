@@ -112,7 +112,7 @@ async function generateSpeech(text, voiceName = DEFAULT_VOICE) {
     // Format: http://MEDIA_HOST:PORT/audio-files/filename.wav
     // The HTTP server setup is handled elsewhere
     const port = process.env.HTTP_PORT || 3000;
-    const audioUrl = `http://${process.env.MEDIA_HOST}:${port}/audio-files/${filename}`;
+    const audioUrl = `http://${require('./media-host')}:${port}/audio-files/${filename}`;
 
     return audioUrl;
 

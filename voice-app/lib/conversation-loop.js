@@ -15,7 +15,7 @@
 const logger = require('./logger');
 
 // Audio cue URLs
-const MEDIA_HOST = process.env.MEDIA_HOST;
+const MEDIA_HOST = require('./media-host');
 const HTTP_PORT = process.env.HTTP_PORT || 3000;
 const READY_BEEP_URL = `http://${MEDIA_HOST}:${HTTP_PORT}/static/ready-beep.wav`;
 const GOTIT_BEEP_URL = `http://${MEDIA_HOST}:${HTTP_PORT}/static/gotit-beep.wav`;

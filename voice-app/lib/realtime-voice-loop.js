@@ -22,7 +22,7 @@ var openclawConfig = require('./openclaw-config');
 var claudeBridge = require('./claude-bridge');
 var prompts = require('./prompts');
 
-var MEDIA_HOST = process.env.MEDIA_HOST;
+var MEDIA_HOST = require('./media-host');
 var HTTP_PORT = process.env.HTTP_PORT || 3000;
 
 var STATE_LISTENING = 'LISTENING';
