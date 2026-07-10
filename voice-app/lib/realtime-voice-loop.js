@@ -174,7 +174,10 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
   var hangupRequested = false;
   var hangupToolCalled = false;
   var hangupTimer = null;
+  var finishTimer = null;
   var endCallResolve = null;
+  // Absolute time when the last audio byte sent to the fork finishes playing
+  var playbackEndsAt = 0;
 
   function doHangup() {
     if (!callActive) return;
@@ -190,7 +193,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
     if (hangupRequested) return;
     hangupRequested = true;
     // Safety net: hang up even if the farewell never finishes cleanly
-    hangupTimer = setTimeout(doHangup, 5000);
+    hangupTimer = setTimeout(doHangup, 8000);
   }
 
   // Hang up once the farewell audio has fully drained to the caller
@@ -205,8 +208,24 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
       clearTimeout(hangupTimer);
       hangupTimer = null;
     }
-    // Small grace period for the last buffered audio to play out
-    setTimeout(doHangup, 1000);
+    if (finishTimer) {
+      clearTimeout(finishTimer);
+      finishTimer = null;
+    }
+    // The pacing throttle sends ahead of real time, so audio can still be
+    // playing at the caller when the queue drains. Wait until the last sent
+    // byte has actually played out, then re-check in case more farewell
+    // audio arrived in the meantime.
+    var waitMs = Math.max(0, playbackEndsAt - Date.now()) + 500;
+    finishTimer = setTimeout(function() {
+      finishTimer = null;
+      if (!callActive) return;
+      if (audioQueue.length > 0 || audioDraining || Date.now() < playbackEndsAt) {
+        maybeFinishHangup();
+        return;
+      }
+      doHangup();
+    }, waitMs);
   }
 
   var audioAccumulator = Buffer.alloc(0);
@@ -510,6 +529,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
         audioBytesSent += chunk.length;
 
         if (!audioSendStart) audioSendStart = Date.now();
+        playbackEndsAt = audioSendStart + (audioBytesSent / bytesPerSecond) * 1000;
 
         // How far ahead are we? (bytes / bytesPerSecond = seconds of audio)
         var elapsedMs = Date.now() - audioSendStart;
@@ -692,6 +712,11 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
     if (hangupTimer) {
       clearTimeout(hangupTimer);
       hangupTimer = null;
+    }
+
+    if (finishTimer) {
+      clearTimeout(finishTimer);
+      finishTimer = null;
     }
 
     if (session) {
