@@ -36,11 +36,21 @@ var RELAY_MODE_TRIGGERS = ['brain mode', 'smart mode', 'clawdbot', 'מצב מל�
 var END_CALL_TOOL = {
   name: 'end_call',
   description: 'Hang up the phone call. You MUST call this immediately after ' +
-    'saying your farewell whenever the caller says goodbye, asks you to hang ' +
-    'up, or declines further help (for example answering "no thanks" when ' +
-    'you ask if they need anything else). Never say goodbye without also ' +
-    'calling this tool.'
+    'saying your farewell whenever the caller signals the conversation is ' +
+    'over, in whatever language they speak: saying goodbye, asking you to ' +
+    'hang up, or declining further help when you offer it. Never say ' +
+    'goodbye or a farewell of any kind without also calling this tool in ' +
+    'the same turn.'
 };
+
+// Appended to the system prompt whenever the end_call tool is available, so
+// hangup behavior does not depend on each operator's own prompt wording
+var END_CALL_PROMPT =
+  'IMPORTANT: You have an end_call tool that hangs up the call. The caller may ' +
+  'speak any language. Whenever the caller indicates the conversation is over ' +
+  '(saying goodbye, declining further help, or asking you to hang up), you must ' +
+  'say a brief farewell and then call end_call. Ending your farewell without ' +
+  'calling end_call is an error.';
 
 // Marker a relay backend can include in its reply to end the call
 var HANGUP_MARKER = /\[HANGUP\]/gi;
@@ -212,6 +222,9 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
   var systemPrompt = directMode
     ? (cfg.directModeSystemPrompt || 'You are a helpful voice assistant. Answer questions naturally and conversationally. Be concise.')
     : (cfg.relayModeSystemPrompt || 'You are a voice relay interface. Only speak the exact text messages you receive.');
+  if (allowHangup && directMode) {
+    systemPrompt += '\n\n' + END_CALL_PROMPT;
+  }
   var greetingText = cfg.greeting || 'Greet the user warmly and briefly.';
 
   async function flushAudio() {
@@ -695,4 +708,4 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
   }
 }
 
-module.exports = { runRealtimeVoiceLoop, extractHangupMarker };
+module.exports = { runRealtimeVoiceLoop, extractHangupMarker, END_CALL_TOOL, END_CALL_PROMPT };
