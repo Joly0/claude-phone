@@ -23,6 +23,7 @@ class Registrar {
     this.domain = config.domain; // 3CX server address
     this.registrar = config.registrar; // Usually same as domain
     this.registrarPort = config.registrar_port || 5060;
+    this.transport = config.transport || 'udp';
 
     // Local address (populated from connect event)
     this.localAddress = config.local_address || 'localhost';
@@ -56,7 +57,7 @@ class Registrar {
   }
 
   _attemptRegistration() {
-    const registrarUri = 'sip:' + this.registrar + ':' + this.registrarPort;
+    const registrarUri = 'sip:' + this.registrar + ':' + this.registrarPort + ';transport=' + this.transport;
 
     // From/To use EXTENSION number, not auth ID
     const fromUri = 'sip:' + this.extension + '@' + this.domain;

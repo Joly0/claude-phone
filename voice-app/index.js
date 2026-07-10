@@ -61,6 +61,7 @@ var config = {
     domain: process.env.SIP_DOMAIN || "hello.networkchuck.com",
     registrar: process.env.SIP_REGISTRAR || "hello.networkchuck.com",
     registrar_port: parseInt(process.env.SIP_REGISTRAR_PORT) || 5060,
+    transport: (process.env.SIP_TRANSPORT || 'udp').toLowerCase(),
     expiry: parseInt(process.env.SIP_EXPIRY) || 3600
   },
   external_ip: process.env.EXTERNAL_IP || "10.70.7.81",
@@ -88,7 +89,7 @@ console.log("\nConfiguration:");
 console.log("  - drachtio:    " + config.drachtio.host + ":" + config.drachtio.port);
 console.log("  - FreeSWITCH:  " + config.freeswitch.host + ":" + config.freeswitch.port);
 console.log("  - SIP Domain:  " + config.sip.domain);
-console.log("  - Registrar:   " + config.sip.registrar + ":" + config.sip.registrar_port);
+console.log("  - Registrar:   " + config.sip.registrar + ":" + config.sip.registrar_port + " (" + config.sip.transport + ")");
 console.log("  - External IP: " + config.external_ip);
 console.log("  - HTTP Port:   " + config.http_port);
 console.log("  - WS Port:     " + config.ws_port);
@@ -123,6 +124,7 @@ srf.on("connect", function(err, hostport) {
       domain: config.sip.domain,
       registrar: config.sip.registrar,
       registrar_port: config.sip.registrar_port,
+      transport: config.sip.transport,
       local_address: localAddress,
       local_port: parseInt(process.env.DRACHTIO_SIP_PORT) || 5060,
       expiry: config.sip.expiry

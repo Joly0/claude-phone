@@ -10,15 +10,37 @@ services:
     container_name: drachtio
     restart: unless-stopped
     network_mode: host
-    command: >
-      drachtio
-      --contact "sip:*:5060;transport=tcp,udp"
-      --external-ip ${EXTERNAL_IP}
-      --secret ${DRACHTIO_SECRET:-cymru}
-      --port 9022
-      --loglevel info
+    # --- TLS support (for SIP trunk providers that require TLS on port 5061) ---
+    # Drachtio needs cert/key files to initialize TLS, even for outbound-only connections.
+    # A self-signed cert is auto-generated at startup if none is provided.
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        mkdir -p /etc/drachtio/tls
+        if [ ! -f /etc/drachtio/tls/server.crt ]; then
+          openssl req -x509 -newkey rsa:2048 \
+            -keyout /etc/drachtio/tls/server.key \
+            -out /etc/drachtio/tls/server.crt \
+            -days 3650 -nodes -subj "/CN=drachtio" 2>/dev/null
+          cp /etc/drachtio/tls/server.crt /etc/drachtio/tls/chain.pem
+        fi
+        exec drachtio \
+          --contact "sip:*:5060;transport=tcp,udp" \
+          --contact "sips:*:5061;transport=tls" \
+          --cert-file /etc/drachtio/tls/server.crt \
+          --key-file /etc/drachtio/tls/server.key \
+          --chain-file /etc/drachtio/tls/chain.pem \
+          --external-ip ${EXTERNAL_IP} \
+          --secret ${DRACHTIO_SECRET:-cymru} \
+          --port 9022 \
+          --loglevel info
+    volumes:
+      # Persist auto-generated TLS cert across restarts
+      - drachtio-tls:/etc/drachtio/tls
     # Ports (for reference - host mode doesn't need port mapping):
     # - 5060: SIP UDP/TCP
+    # - 5061: SIP TLS
     # - 9022: Admin/App Port
 
   freeswitch:
@@ -75,3 +97,6 @@ services:
     # Ports (for reference):
     # - 3000: HTTP API
     # - 3001: WebSocket for audio streaming
+
+volumes:
+  drachtio-tls:
