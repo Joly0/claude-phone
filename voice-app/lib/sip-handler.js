@@ -3,6 +3,7 @@
  */
 
 const { runVoicePipeline } = require('./voice-pipeline');
+const publicIp = require('./public-ip');
 
 function extractCallerId(req) {
   var from = req.get("From") || "";
@@ -100,7 +101,7 @@ async function handleInvite(req, res, options) {
       codecs: ['G722', 'PCMA', 'PCMU'],
       headers: {
         'Supported': 'timer',
-        'Contact': '<sip:' + (process.env.PUBLIC_IP || process.env.EXTERNAL_IP) + ':' + (process.env.DRACHTIO_SIP_PORT || '5060') + ';transport=tcp>'
+        'Contact': '<sip:' + publicIp.getPublicIp() + ':' + (process.env.DRACHTIO_SIP_PORT || '5060') + ';transport=tcp>'
       }
     });
     const { endpoint, dialog } = result;

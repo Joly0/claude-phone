@@ -11,6 +11,9 @@ class MultiRegistrar {
     this.srf = srf;
     this.baseConfig = baseConfig;
     this.registrations = new Map();
+    // All devices ever registered, including ones currently failing/retrying
+    // (shares config object references with the retry/refresh closures)
+    this.deviceConfigs = new Map();
     this.timers = new Map();
     // Resolved SRV targets (shared across devices, re-resolved on TTL expiry)
     this.resolvedTargets = null;
@@ -49,7 +52,29 @@ class MultiRegistrar {
     };
 
     console.log('[MULTI-REGISTRAR] Registering ' + device.name + ' (ext ' + device.extension + ')');
+    this.deviceConfigs.set(device.extension || device.name, { device: device, config: config });
     this.resolveAndRegister(device, config);
+  }
+
+  /**
+   * Switch to a new local (public) address and re-register all devices
+   * immediately so their Contact headers point at the new IP.
+   */
+  updateLocalAddress(newAddress) {
+    if (!newAddress || newAddress === this.baseConfig.local_address) return;
+
+    console.log('[MULTI-REGISTRAR] Local address changed to ' + newAddress + ', re-registering all devices');
+    this.baseConfig.local_address = newAddress;
+
+    const self = this;
+    this.deviceConfigs.forEach(function(entry, key) {
+      entry.config.local_address = newAddress;
+      if (self.timers.has(key)) {
+        clearTimeout(self.timers.get(key));
+        self.timers.delete(key);
+      }
+      self.resolveAndRegister(entry.device, entry.config);
+    });
   }
 
   /**
@@ -183,6 +208,7 @@ class MultiRegistrar {
     this.timers.forEach(function(timer) { clearTimeout(timer); });
     this.timers.clear();
     this.registrations.clear();
+    this.deviceConfigs.clear();
     console.log('[MULTI-REGISTRAR] Stopped all registrations');
   }
 }

@@ -22,6 +22,10 @@ var ttsService = require("./lib/tts-service");
 var deviceRegistry = require("./lib/device-registry");
 var MultiRegistrar = require("./lib/multi-registrar");
 
+// Public IP auto-detection (PUBLIC_IP=auto)
+var publicIp = require("./lib/public-ip");
+var freeswitchRefresh = require("./lib/freeswitch-refresh");
+
 // OpenClaw routing
 var openclawConfig = require('./lib/openclaw-config');
 
@@ -107,12 +111,21 @@ srf.connect({
   secret: config.drachtio.secret
 });
 
-srf.on("connect", function(err, hostport) {
+srf.on("connect", async function(err, hostport) {
   console.log("[" + new Date().toISOString() + "] DRACHTIO Connected at " + hostport);
   drachtioConnected = true;
 
-  var localAddress = process.env.PUBLIC_IP || config.external_ip;
-  console.log("[DRACHTIO] Local SIP address: " + localAddress);
+  // Resolve the public IP before registering so Contact headers are correct
+  if (publicIp.isAuto() && !registrar) {
+    await publicIp.start({ onChange: handlePublicIpChange });
+    if (!publicIp.getPublicIp() || publicIp.getPublicIp() === config.external_ip) {
+      console.warn("[PUBLIC-IP] Auto-detection failed, falling back to EXTERNAL_IP " + config.external_ip);
+    }
+  }
+
+  var localAddress = publicIp.getPublicIp() || config.external_ip;
+  console.log("[DRACHTIO] Local SIP address: " + localAddress +
+    (publicIp.isAuto() ? " (auto-detected)" : ""));
 
   // Start Multi-Registration for all devices
   if (!registrar) {
@@ -137,6 +150,27 @@ srf.on("error", function(err) {
   console.error("[" + new Date().toISOString() + "] DRACHTIO error: " + err.message);
   drachtioConnected = false;
 });
+
+/**
+ * The public IP changed while running (PUBLIC_IP=auto).
+ * Re-register SIP with the new address and best-effort refresh the
+ * FreeSWITCH advertised RTP address. Calls active at change time are lost
+ * either way since the old address no longer exists.
+ */
+function handlePublicIpChange(newIp, oldIp) {
+  console.warn("[PUBLIC-IP] Address changed " + oldIp + " -> " + newIp +
+    ": re-registering SIP and refreshing FreeSWITCH. Active calls may have dropped.");
+
+  if (registrar) {
+    registrar.updateLocalAddress(newIp);
+  }
+
+  freeswitchRefresh.refreshAdvertisedIp(mediaServer, newIp).then(function(ok) {
+    if (!ok) {
+      console.warn("[PUBLIC-IP] FreeSWITCH refresh incomplete. If calls have no audio, restart the stack (docker compose restart).");
+    }
+  });
+}
 
 // Initialize FreeSWITCH MRF with retry logic
 var mrf = new Mrf(srf);
