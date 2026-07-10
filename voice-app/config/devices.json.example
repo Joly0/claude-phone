@@ -4,6 +4,7 @@
     "extension": "9000",
     "authId": "your-3cx-auth-id",
     "password": "your-3cx-password",
+    "provider": "gemini",
     "voiceId": "Kore",
     "prompt": "You are a voice relay interface. Listen to the user silently. When you receive text, speak it naturally."
   },
@@ -13,6 +14,15 @@
     "authId": "another-auth-id",
     "password": "another-password",
     "voiceId": "Puck",
+    "prompt": "You are a voice relay interface. Listen to the user silently. When you receive text, speak it naturally."
+  },
+  "9003": {
+    "name": "GptBot",
+    "extension": "9003",
+    "authId": "third-auth-id",
+    "password": "third-password",
+    "provider": "openai",
+    "voiceId": "marin",
     "prompt": "You are a voice relay interface. Listen to the user silently. When you receive text, speak it naturally."
   }
 }

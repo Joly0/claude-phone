@@ -15,8 +15,10 @@ Claude Phone gives your Claude Code installation a phone number. You can:
 
 ## What's different in this fork
 
-This fork replaces the original ElevenLabs/Whisper pipeline with **Gemini Live** for real-time speech recognition and synthesis, and adds:
+This fork replaces the original ElevenLabs/Whisper pipeline with pluggable **realtime voice providers** for speech recognition and synthesis, and adds:
 
+- **Selectable voice providers**: **Gemini Live** (default), the **OpenAI Realtime API**, or the original turn-based pipeline (`classic`). Pick a global default with `VOICE_PROVIDER` in `.env`, or per extension with a `"provider"` field in `voice-app/config/devices.json`. A device's `voiceId` must be a voice of its provider (e.g. `Kore`/`Puck` for Gemini, `marin`/`cedar` for OpenAI)
+- **OpenAI Realtime support**: defaults to `gpt-realtime-2.1`; set `OPENAI_REALTIME_MODEL` to switch models (e.g. `gpt-live-1` once OpenAI makes GPT-Live available on the API). Requires `OPENAI_API_KEY`. Note: outbound announcements and the initial message of outbound conversations are still spoken with Google TTS, so `GOOGLE_API_KEY` remains required for outbound calls
 - **Direct SIP trunk registration** - register with a carrier directly instead of (or in addition to) a local PBX:
   - TLS transport support (`SIP_TRANSPORT=tls`) for providers that only accept SIP over TLS on port 5061; a self-signed certificate is generated automatically
   - DNS SRV resolution with failover: registrar targets are looked up via SRV records (honoring priority and weight), cached until the TTL expires, and the next target is tried on errors or 503 responses
@@ -26,7 +28,7 @@ This fork replaces the original ElevenLabs/Whisper pipeline with **Gemini Live**
 - **Native 24kHz audio** streamed back over the bidirectional audio fork with real-time pacing, instead of downsampled 8kHz file playback
 - **Local voice activity barge-in**: interrupt the assistant mid-sentence without waiting for the server-side interruption signal
 - **Configurable voice prompts** via `voice-app/config/prompts.json` (see [Voice Prompts](#voice-prompts))
-- **Two conversation modes** with mid-call switching: *direct mode* (default, Gemini answers natively for sub-second responses) and *relay mode* (an AI backend provides the answers and Gemini speaks them)
+- **Two conversation modes** with mid-call switching: *direct mode* (default, the voice provider answers natively for sub-second responses) and *relay mode* (an AI backend provides the answers and the voice provider speaks them)
 - **Claude API bridge fallback**: calls work out of the box with the bundled claude-api-server when no OpenClaw route is configured
 
 ## Prerequisites
@@ -34,7 +36,8 @@ This fork replaces the original ElevenLabs/Whisper pipeline with **Gemini Live**
 | Requirement | Where to Get It | Notes |
 |-------------|-----------------|-------|
 | **SIP provider** | [3cx.com](https://www.3cx.com/) or any SIP trunk | 3CX free tier works; direct trunk registration is also supported |
-| **Google API Key** | [aistudio.google.com](https://aistudio.google.com/) | For Gemini Live speech recognition and synthesis |
+| **Google API Key** | [aistudio.google.com](https://aistudio.google.com/) | For Gemini Live speech and outbound call TTS |
+| **OpenAI API Key** (optional) | [platform.openai.com](https://platform.openai.com/) | Only for `VOICE_PROVIDER=openai` (Realtime API) |
 | **Claude Code CLI** | [claude.ai/code](https://claude.ai/code) | Requires Claude Max subscription |
 
 ## Platform Support
