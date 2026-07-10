@@ -26,12 +26,12 @@ services:
           cp /etc/drachtio/tls/server.crt /etc/drachtio/tls/chain.pem
         fi
         exec drachtio \
-          --contact "sip:*:5060;transport=tcp,udp" \
-          --contact "sips:*:5061;transport=tls" \
+          --contact "sip:*:${DRACHTIO_SIP_PORT:-5060};transport=tcp,udp" \
+          --contact "sips:*:${DRACHTIO_TLS_PORT:-5061};transport=tls" \
           --cert-file /etc/drachtio/tls/server.crt \
           --key-file /etc/drachtio/tls/server.key \
           --chain-file /etc/drachtio/tls/chain.pem \
-          --external-ip ${EXTERNAL_IP} \
+          --external-ip ${PUBLIC_IP:-${EXTERNAL_IP}} \
           --secret ${DRACHTIO_SECRET:-cymru} \
           --port 9022 \
           --loglevel info
@@ -39,8 +39,8 @@ services:
       # Persist auto-generated TLS cert across restarts
       - drachtio-tls:/etc/drachtio/tls
     # Ports (for reference - host mode doesn't need port mapping):
-    # - 5060: SIP UDP/TCP
-    # - 5061: SIP TLS
+    # - 5060 (DRACHTIO_SIP_PORT): SIP UDP/TCP
+    # - 5061 (DRACHTIO_TLS_PORT): SIP TLS
     # - 9022: Admin/App Port
 
   freeswitch:
@@ -48,19 +48,27 @@ services:
     container_name: freeswitch
     restart: unless-stopped
     network_mode: host
-    command: >
-      freeswitch
-      --sip-port 5080
-      --rtp-range-start 30000
-      --rtp-range-end 30100
-      --ext-rtp-ip ${EXTERNAL_IP}
-      --ext-sip-ip ${EXTERNAL_IP}
-      --advertise-external-ip
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        # Patch mrf.xml so only loopback counts as a local network. FreeSWITCH
+        # then advertises ext-rtp-ip to ALL callers, which is required when a
+        # SIP trunk delivers calls from outside the LAN.
+        sed -i '/<param name="apply-nat-acl"/a \      <param name="local-network-acl" value="loopback.auto"/>' \
+          /usr/local/freeswitch/conf/sip_profiles/mrf.xml
+        exec /entrypoint.sh freeswitch \
+          --sip-port 5080 \
+          --rtp-range-start 30000 \
+          --rtp-range-end 30100 \
+          --ext-rtp-ip $${PUBLIC_IP:-$$EXTERNAL_IP} \
+          --ext-sip-ip $$EXTERNAL_IP \
+          --advertise-external-ip
     environment:
       # CRITICAL: Set this to your server's LAN IP
       # This IP goes into SDP packets so 3CX knows where to send audio
-      # Note: drachtio-freeswitch-mrf only accepts CLI flags, not env vars
       - EXTERNAL_IP=${EXTERNAL_IP}
+      - PUBLIC_IP=${PUBLIC_IP:-${EXTERNAL_IP}}
     # Ports (for reference):
     # - 8021: ESL (Event Socket Library)
     # - 5080: Internal SIP

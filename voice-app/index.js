@@ -111,11 +111,7 @@ srf.on("connect", function(err, hostport) {
   console.log("[" + new Date().toISOString() + "] DRACHTIO Connected at " + hostport);
   drachtioConnected = true;
 
-  var localAddress = config.external_ip;
-  if (hostport && hostport.length > 0) {
-    var match = hostport[0].match(/\/([^:]+)/);
-    if (match) localAddress = match[1];
-  }
+  var localAddress = process.env.PUBLIC_IP || config.external_ip;
   console.log("[DRACHTIO] Local SIP address: " + localAddress);
 
   // Start Multi-Registration for all devices
