@@ -36,8 +36,9 @@ var RELAY_MODE_TRIGGERS = ['brain mode', 'smart mode', 'clawdbot', 'מצב מל�
 var END_CALL_TOOL = {
   name: 'end_call',
   description: 'Hang up the phone call. You MUST call this immediately after ' +
-    'saying your farewell whenever the caller says goodbye, ends the ' +
-    'conversation, or asks you to hang up. Never say goodbye without also ' +
+    'saying your farewell whenever the caller says goodbye, asks you to hang ' +
+    'up, or declines further help (for example answering "no thanks" when ' +
+    'you ask if they need anything else). Never say goodbye without also ' +
     'calling this tool.'
 };
 
@@ -163,11 +164,16 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
   var hangupRequested = false;
   var hangupToolCalled = false;
   var hangupTimer = null;
+  var endCallResolve = null;
 
   function doHangup() {
     if (!callActive) return;
     logger.info('Assistant ended the call', { callUuid: callUuid });
+    // drachtio only emits the dialog 'destroy' event for remote hangups, so
+    // end the loop ourselves after sending the BYE
+    callActive = false;
     dialog.destroy().catch(function() {});
+    if (endCallResolve) endCallResolve();
   }
 
   function requestHangup() {
@@ -618,6 +624,8 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
 
     // 12. Wait for call to end
     await new Promise(function(resolve) {
+      endCallResolve = resolve;
+
       dialog.once('destroy', function() {
         callActive = false;
         resolve();

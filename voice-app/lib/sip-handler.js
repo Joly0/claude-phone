@@ -122,6 +122,10 @@ async function handleInvite(req, res, options) {
       callerExtension: callerId
     });
 
+    // Locally initiated hangups (assistant end_call) do not emit the dialog
+    // destroy event, so always release the media endpoint here as well
+    if (endpoint) endpoint.destroy().catch(function() {});
+
     return { endpoint: endpoint, dialog: dialog, callerId: callerId, callUuid: callUuid };
 
   } catch (error) {
