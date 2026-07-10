@@ -1,8 +1,9 @@
 /**
- * SIP Call Handler with Gemini Live conversation loop
+ * SIP Call Handler with realtime voice conversation loop
  */
 
-const { runGeminiLiveLoop } = require('./gemini-live-loop');
+const providers = require('./providers');
+const { runRealtimeVoiceLoop } = require('./realtime-voice-loop');
 
 function extractCallerId(req) {
   var from = req.get("From") || "";
@@ -113,8 +114,8 @@ async function handleInvite(req, res, options) {
       if (endpoint) endpoint.destroy().catch(function() {});
     });
 
-    // Run Gemini Live with OpenClaw relay
-    await runGeminiLiveLoop(endpoint, dialog, callUuid, {
+    // Run the realtime voice loop with OpenClaw relay
+    await runRealtimeVoiceLoop(providers.get('gemini'), endpoint, dialog, callUuid, {
       audioForkServer: options.audioForkServer,
       wsPort: options.wsPort,
       deviceConfig: deviceConfig,

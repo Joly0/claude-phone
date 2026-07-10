@@ -1,12 +1,13 @@
 /**
- * Gemini Live Conversation Loop — OpenClaw Relay Mode
+ * Realtime Voice Conversation Loop — OpenClaw Relay Mode
  *
- * Gemini Live handles speech recognition and speech synthesis.
+ * A realtime voice provider (Gemini Live, OpenAI Realtime, ...) handles
+ * speech recognition and speech synthesis via a provider descriptor.
  * OpenClaw provides the AI brain (context, memory, tools).
  *
  * Supports mid-call mode switching:
- *   RELAY (default): Caller → Gemini STT → OpenClaw → Gemini TTS → Caller
- *   DIRECT: Caller → Gemini answers natively (sub-second, no context)
+ *   RELAY: Caller → provider STT → OpenClaw → provider TTS → Caller
+ *   DIRECT (default): Caller → provider answers natively (sub-second, no context)
  *
  * Trigger words: "direct mode"/"fast mode" and "brain mode"/"smart mode"
  */
@@ -16,7 +17,6 @@ var path = require('path');
 var crypto = require('crypto');
 var WaveFile = require('wavefile').WaveFile;
 var logger = require('./logger');
-var GeminiLiveSession = require('./gemini-live-session').GeminiLiveSession;
 var openclawBridge = require('./openclaw-bridge');
 var openclawConfig = require('./openclaw-config');
 var claudeBridge = require('./claude-bridge');
@@ -58,16 +58,18 @@ function pcmToWav(pcmBuffer, sampleRate) {
   return Buffer.from(wav.toBuffer());
 }
 
-async function saveAndGetUrl(wavBuffer, audioDir) {
-  var filename = 'gemini-live-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex') + '.wav';
+async function saveAndGetUrl(wavBuffer, audioDir, prefix) {
+  var filename = prefix + '-live-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex') + '.wav';
   var filepath = path.join(audioDir, filename);
   await fs.promises.writeFile(filepath, wavBuffer);
   return 'http://' + MEDIA_HOST + ':' + HTTP_PORT + '/audio-files/' + filename;
 }
 
 /**
- * Run a voice conversation loop using Gemini Live as ears/mouth and OpenClaw as brain
+ * Run a voice conversation loop using a realtime voice provider as ears/mouth
+ * and OpenClaw as brain
  *
+ * @param {Object} provider - Provider descriptor (see lib/providers/index.js)
  * @param {Object} endpoint - FreeSWITCH endpoint
  * @param {Object} dialog - SIP dialog
  * @param {string} callUuid - Unique call identifier
@@ -80,7 +82,7 @@ async function saveAndGetUrl(wavBuffer, audioDir) {
  * @param {string} [options.callerExtension] - Caller's extension number
  * @returns {Promise<{success: boolean, error?: string}>}
  */
-async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
+async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, options) {
   var audioForkServer = options.audioForkServer;
   var wsPort = options.wsPort || 3001;
   var deviceConfig = options.deviceConfig || null;
@@ -100,13 +102,19 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
     logger.info('No OpenClaw config, using Claude API bridge', { callUuid: callUuid, callerExtension: callerExtension });
   }
 
-  // Validate Google API key
-  if (!process.env.GOOGLE_API_KEY) {
-    logger.warn('Gemini Live requires GOOGLE_API_KEY', { callUuid: callUuid });
-    return { success: false, error: 'GOOGLE_API_KEY not set' };
+  var voiceId = (deviceConfig && deviceConfig.voiceId) ? deviceConfig.voiceId : provider.defaultVoice;
+  if (provider.knownVoices && provider.knownVoices.indexOf(voiceId) === -1) {
+    logger.warn('Voice not supported by provider, using default', {
+      callUuid: callUuid,
+      provider: provider.name,
+      voiceId: voiceId,
+      defaultVoice: provider.defaultVoice
+    });
+    voiceId = provider.defaultVoice;
   }
 
-  var voiceId = (deviceConfig && deviceConfig.voiceId) ? deviceConfig.voiceId : 'Puck';
+  // Audio math derived from the provider's output stream (pcm16 = 2 bytes/sample)
+  var bytesPerSecond = provider.outputSampleRate * 2;
 
   var session = null;
   var audioSession = null;
@@ -138,13 +146,13 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
 
   async function flushAudio() {
     flushTimer = null;
-    if (audioAccumulator.length < 960) return; // ~20ms at 24kHz
+    if (audioAccumulator.length < bytesPerSecond * 0.02) return; // ~20ms of audio
 
     var pcmData = audioAccumulator;
     audioAccumulator = Buffer.alloc(0);
 
-    var wavBuf = pcmToWav(pcmData, 24000);
-    var url = await saveAndGetUrl(wavBuf, audioDir);
+    var wavBuf = pcmToWav(pcmData, provider.outputSampleRate);
+    var url = await saveAndGetUrl(wavBuf, audioDir, provider.name);
     playQueue.push(url);
     processPlayQueue();
   }
@@ -245,8 +253,9 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
   }
 
   try {
-    logger.info('Gemini Live OpenClaw relay starting', {
+    logger.info('Realtime voice OpenClaw relay starting', {
       callUuid: callUuid,
+      provider: provider.name,
       skipGreeting: skipGreeting,
       hasInitialContext: !!initialContext,
       voiceId: voiceId,
@@ -257,33 +266,32 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
 
     dialog.on('destroy', onDialogDestroy);
 
-    // 1. Connect Gemini Live
-    session = new GeminiLiveSession({
-      apiKey: process.env.GOOGLE_API_KEY,
+    // 1. Connect the realtime voice session
+    session = provider.createSession({
       systemPrompt: systemPrompt,
       voiceName: voiceId
     });
 
     try {
       await session.connect();
-      logger.info('Gemini Live session connected', { callUuid: callUuid });
+      logger.info('Realtime voice session connected', { callUuid: callUuid, provider: provider.name });
     } catch (err) {
-      logger.error('Gemini Live connection failed', { callUuid: callUuid, error: err.message });
+      logger.error('Realtime voice connection failed', { callUuid: callUuid, provider: provider.name, error: err.message });
       return { success: false, error: err.message };
     }
 
-    // 2. Greeting or initial context via Gemini TTS
+    // 2. Greeting or initial context via provider TTS
     if (!skipGreeting && callActive) {
       session.sendText(directMode ? greetingText : 'Hello! How can I help you?');
       state = STATE_SPEAKING;
       greetingActive = true;
-      logger.info('Greeting sent to Gemini', { callUuid: callUuid });
+      logger.info('Greeting sent to provider', { callUuid: callUuid });
     }
 
     if (initialContext && callActive) {
       session.sendText(initialContext);
       state = STATE_SPEAKING;
-      logger.info('Initial context sent to Gemini', { callUuid: callUuid });
+      logger.info('Initial context sent to provider', { callUuid: callUuid });
     }
 
     if (!callActive) {
@@ -305,11 +313,11 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
     await endpoint.forkAudioStart({
       wsUrl: wsUrl,
       mixType: 'mono',
-      sampling: '16k',
+      sampling: (provider.inputSampleRate / 1000) + 'k',
       bidirectionalAudio: {
         enabled: 'true',
         streaming: 'true',
-        sampleRate: '24000'
+        sampleRate: String(provider.outputSampleRate)
       }
     });
     forkRunning = true;
@@ -347,7 +355,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
       return { success: true };
     }
 
-    // 4. Pipe raw audio from caller to Gemini Live
+    // 4. Pipe raw audio from caller to the provider session
     if (audioSession.ws) {
       audioSession.ws.on('message', function(data) {
         if (Buffer.isBuffer(data)) {
@@ -367,7 +375,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
 
       if (directMode) {
         // In direct mode, only check for mode switch triggers
-        // Gemini handles the response natively — no OpenClaw query needed
+        // The provider handles the response natively — no OpenClaw query needed
         return;
       }
 
@@ -383,7 +391,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
       }, 1500);
     });
 
-    // 6. Handle Gemini audio output, throttled to the real-time rate
+    // 6. Handle provider audio output, throttled to the real-time rate
     var audioSendStart = null;
     var audioBytesSent = 0;
     var audioQueue = [];
@@ -410,9 +418,9 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
 
         if (!audioSendStart) audioSendStart = Date.now();
 
-        // How far ahead are we? (bytes / 48000 = seconds at 24kHz 16-bit)
+        // How far ahead are we? (bytes / bytesPerSecond = seconds of audio)
         var elapsedMs = Date.now() - audioSendStart;
-        var sentMs = (audioBytesSent / 48000) * 1000;
+        var sentMs = (audioBytesSent / bytesPerSecond) * 1000;
         var aheadMs = sentMs - elapsedMs;
 
         if (aheadMs > 60 && audioQueue.length > 0) {
@@ -431,17 +439,17 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
       sendNext();
     }
 
-    session.on('audio', function(pcm24k) {
+    session.on('audio', function(pcm) {
       if (state === STATE_SPEAKING || (state === STATE_LISTENING && directMode)) {
         // In SPEAKING state: always play audio (relay response or direct response)
-        // In LISTENING+directMode: Gemini is answering directly, play its audio
+        // In LISTENING+directMode: the provider is answering directly, play its audio
         if (state === STATE_LISTENING && directMode) {
           state = STATE_SPEAKING;
         }
-        audioQueue.push(pcm24k);
+        audioQueue.push(pcm);
         drainAudioQueue();
       }
-      // In LISTENING state (relay mode), discard all Gemini audio
+      // In LISTENING state (relay mode), discard all provider audio
     });
 
     // 7. Handle turnComplete
@@ -474,7 +482,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
         }
 
       } else if (state === STATE_SPEAKING) {
-        // Gemini finished speaking — flush remaining audio
+        // Provider finished speaking — flush remaining audio
         if (flushTimer) {
           clearTimeout(flushTimer);
           flushTimer = null;
@@ -483,7 +491,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
           flushAudio();
         }
 
-        logger.info('Gemini finished speaking, switching to listening', { callUuid: callUuid });
+        logger.info('Provider finished speaking, switching to listening', { callUuid: callUuid });
         state = STATE_LISTENING;
         inputTranscriptBuffer = '';
       }
@@ -503,14 +511,14 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
       inputTranscriptBuffer = '';
     });
 
-    // 9. Handle Gemini errors
+    // 9. Handle provider errors
     session.on('error', function(err) {
-      logger.error('Gemini Live error', { callUuid: callUuid, error: err.message });
+      logger.error('Realtime voice error', { callUuid: callUuid, provider: provider.name, error: err.message });
     });
 
-    // 10. Log what Gemini speaks
+    // 10. Log what the provider speaks
     session.on('transcript', function(text) {
-      logger.info('Gemini spoke', { callUuid: callUuid, text: text });
+      logger.info('Provider spoke', { callUuid: callUuid, text: text });
     });
 
     // 11. Wait for call to end
@@ -522,14 +530,14 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
 
       session.on('error', function(err) {
         if (err.message && err.message.indexOf('Max reconnect attempts') !== -1) {
-          logger.error('Gemini Live permanently failed', { callUuid: callUuid });
+          logger.error('Realtime voice session permanently failed', { callUuid: callUuid, provider: provider.name });
           resolve();
         }
       });
 
       session.on('close', function() {
         if (!callActive) return;
-        logger.info('Gemini Live session closed', { callUuid: callUuid });
+        logger.info('Realtime voice session closed', { callUuid: callUuid, provider: provider.name });
         resolve();
       });
 
@@ -538,19 +546,20 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
       }
     });
 
-    logger.info('Gemini Live OpenClaw relay ended normally', { callUuid: callUuid });
+    logger.info('Realtime voice relay ended normally', { callUuid: callUuid, provider: provider.name });
     return { success: true };
 
   } catch (error) {
-    logger.error('Gemini Live loop error', {
+    logger.error('Realtime voice loop error', {
       callUuid: callUuid,
+      provider: provider.name,
       error: error.message,
       stack: error.stack
     });
     return { success: false, error: error.message };
 
   } finally {
-    logger.info('Gemini Live loop cleanup', { callUuid: callUuid });
+    logger.info('Realtime voice loop cleanup', { callUuid: callUuid, provider: provider.name });
 
     dialog.off('destroy', onDialogDestroy);
 
@@ -578,4 +587,4 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
   }
 }
 
-module.exports = { runGeminiLiveLoop };
+module.exports = { runRealtimeVoiceLoop };
