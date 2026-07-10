@@ -11,14 +11,16 @@
  *     knownVoices: [...] | null,       // if set, unknown voiceIds fall back to defaultVoice
  *     inputSampleRate: 16000,          // PCM rate sendAudio() accepts (= fork capture rate)
  *     outputSampleRate: 24000,         // PCM rate of 'audio' event buffers
- *     createSession: function(opts) {} // opts: { systemPrompt, voiceName } -> session
+ *     createSession: function(opts) {} // opts: { systemPrompt, voiceName, tools } -> session
  *   }
  *
  * Session contract (EventEmitter):
  *   Methods: connect() -> Promise (resolved = ready for sendText),
- *            sendAudio(pcm16 mono LE @ inputSampleRate), sendText(text), close()
+ *            sendAudio(pcm16 mono LE @ inputSampleRate), sendText(text), close(),
+ *            sendToolResponse(id, name, response) when tools are supported
  *   Events:  ready, audio (Buffer pcm16 @ outputSampleRate), transcript,
- *            inputTranscription, turnComplete, interrupted, error, close
+ *            inputTranscription, turnComplete, interrupted, error, close,
+ *            toolCall ({ id, name, args }) when tools were passed to createSession
  *   Permanent failure: 'error' whose message contains 'Max reconnect attempts'
  *
  * The 'classic' turn-based pipeline is not a descriptor; it is dispatched

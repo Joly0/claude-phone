@@ -128,3 +128,48 @@ describe('OpenAIRealtimeSession', function () {
     });
   });
 });
+
+describe('OpenAIRealtimeSession tools', function () {
+  function createToolSession() {
+    return new OpenAIRealtimeSession({
+      apiKey: 'test-key-not-real',
+      tools: [{ name: 'end_call', description: 'End the phone call' }]
+    });
+  }
+
+  it('includes tools in the session update when configured', function () {
+    var msg = createToolSession()._buildSessionUpdate();
+    assert.strictEqual(msg.session.tools.length, 1);
+    assert.deepStrictEqual(msg.session.tools[0], {
+      type: 'function',
+      name: 'end_call',
+      description: 'End the phone call',
+      parameters: { type: 'object', properties: {} }
+    });
+    assert.strictEqual(msg.session.tool_choice, 'auto');
+  });
+
+  it('omits tools from the session update by default', function () {
+    var msg = new OpenAIRealtimeSession({ apiKey: 'test-key-not-real' })._buildSessionUpdate();
+    assert.strictEqual(msg.session.tools, undefined);
+    assert.strictEqual(msg.session.tool_choice, undefined);
+  });
+
+  it('emits toolCall for completed function_call output items', function () {
+    var session = createToolSession();
+    var calls = [];
+    session.on('toolCall', function (call) { calls.push(call); });
+
+    session._handleMessage({
+      type: 'response.output_item.done',
+      item: { type: 'function_call', name: 'end_call', call_id: 'call_1', arguments: '{}' }
+    });
+    session._handleMessage({
+      type: 'response.output_item.done',
+      item: { type: 'message', content: [] }
+    });
+
+    assert.strictEqual(calls.length, 1);
+    assert.deepStrictEqual(calls[0], { id: 'call_1', name: 'end_call', args: {} });
+  });
+});

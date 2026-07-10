@@ -17,7 +17,8 @@ var descriptor = {
       apiKey: process.env.GOOGLE_API_KEY,
       model: process.env.GEMINI_LIVE_MODEL,
       systemPrompt: opts.systemPrompt,
-      voiceName: opts.voiceName
+      voiceName: opts.voiceName,
+      tools: opts.tools
     });
   }
 };

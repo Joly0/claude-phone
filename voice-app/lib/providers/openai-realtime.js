@@ -32,8 +32,10 @@ class OpenAIRealtimeSession extends EventEmitter {
    * @param {string} [opts.systemPrompt] - Session instructions
    * @param {string} [opts.voiceName] - OpenAI realtime voice name
    * @param {string} [opts.transcribeModel] - Input transcription model
+   * @param {Array<{name: string, description: string}>} [opts.tools] -
+   *   Function declarations the model may call (emitted as 'toolCall')
    */
-  constructor({ apiKey, model, systemPrompt, voiceName, transcribeModel }) {
+  constructor({ apiKey, model, systemPrompt, voiceName, transcribeModel, tools }) {
     super();
 
     if (!apiKey) {
@@ -45,6 +47,7 @@ class OpenAIRealtimeSession extends EventEmitter {
     this.systemPrompt = systemPrompt || '';
     this.voiceName = voiceName || DEFAULT_VOICE;
     this.transcribeModel = transcribeModel || DEFAULT_TRANSCRIBE_MODEL;
+    this.tools = (tools && tools.length) ? tools : null;
 
     this.ws = null;
     this.connected = false;
@@ -63,23 +66,38 @@ class OpenAIRealtimeSession extends EventEmitter {
    * @returns {Object}
    */
   _buildSessionUpdate() {
+    var session = {
+      type: 'realtime',
+      instructions: this.systemPrompt,
+      output_modalities: ['audio'],
+      audio: this._buildAudioConfig()
+    };
+
+    if (this.tools) {
+      session.tools = this.tools.map(function(tool) {
+        return {
+          type: 'function',
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters || { type: 'object', properties: {} }
+        };
+      });
+      session.tool_choice = 'auto';
+    }
+
+    return { type: 'session.update', session: session };
+  }
+
+  _buildAudioConfig() {
     return {
-      type: 'session.update',
-      session: {
-        type: 'realtime',
-        instructions: this.systemPrompt,
-        output_modalities: ['audio'],
-        audio: {
-          input: {
-            format: { type: 'audio/pcm', rate: API_SAMPLE_RATE },
-            transcription: { model: this.transcribeModel },
-            turn_detection: { type: 'server_vad', interrupt_response: true }
-          },
-          output: {
-            format: { type: 'audio/pcm', rate: API_SAMPLE_RATE },
-            voice: this.voiceName
-          }
-        }
+      input: {
+        format: { type: 'audio/pcm', rate: API_SAMPLE_RATE },
+        transcription: { model: this.transcribeModel },
+        turn_detection: { type: 'server_vad', interrupt_response: true }
+      },
+      output: {
+        format: { type: 'audio/pcm', rate: API_SAMPLE_RATE },
+        voice: this.voiceName
       }
     };
   }
@@ -285,6 +303,31 @@ class OpenAIRealtimeSession extends EventEmitter {
   }
 
   /**
+   * Reply to a model function call.
+   * @param {string} id - The call id from the 'toolCall' event
+   * @param {string} name - The function name (unused; kept for contract parity)
+   * @param {Object} response - Result payload (e.g. { result: 'ok' })
+   */
+  sendToolResponse(id, name, response) {
+    if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    try {
+      this.ws.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'function_call_output',
+          call_id: id,
+          output: JSON.stringify(response)
+        }
+      }));
+    } catch (err) {
+      logger.warn('OpenAI Realtime failed to send tool response', { error: err.message });
+    }
+  }
+
+  /**
    * Close the WebSocket connection cleanly.
    */
   close() {
@@ -322,6 +365,22 @@ class OpenAIRealtimeSession extends EventEmitter {
     switch (data.type) {
       case 'response.created':
         this._responseActive = true;
+        break;
+
+      case 'response.output_item.done':
+        // Function calls arrive as completed output items
+        if (data.item && data.item.type === 'function_call') {
+          var fnArgs = {};
+          try {
+            fnArgs = data.item.arguments ? JSON.parse(data.item.arguments) : {};
+          } catch (e) { /* leave empty on malformed arguments */ }
+          logger.info('OpenAI Realtime tool call', { name: data.item.name, id: data.item.call_id });
+          this.emit('toolCall', {
+            id: data.item.call_id,
+            name: data.item.name,
+            args: fnArgs
+          });
+        }
         break;
 
       case 'response.output_audio.delta':
@@ -433,7 +492,8 @@ var descriptor = {
       model: process.env.OPENAI_REALTIME_MODEL,
       systemPrompt: opts.systemPrompt,
       voiceName: opts.voiceName,
-      transcribeModel: process.env.OPENAI_TRANSCRIBE_MODEL
+      transcribeModel: process.env.OPENAI_TRANSCRIBE_MODEL,
+      tools: opts.tools
     });
   }
 };

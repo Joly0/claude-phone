@@ -227,3 +227,22 @@ describe('GeminiLiveSession', function () {
     });
   });
 });
+
+describe('GeminiLiveSession tools', function () {
+  it('emits toolCall for model function calls', function () {
+    var session = new GeminiLiveSession({
+      apiKey: 'test-key-not-real',
+      tools: [{ name: 'end_call', description: 'End the phone call' }]
+    });
+    var calls = [];
+    session.on('toolCall', function (call) { calls.push(call); });
+
+    session._handleMessage({
+      toolCall: { functionCalls: [{ id: 'fc-1', name: 'end_call', args: {} }] }
+    });
+    session._handleMessage({ serverContent: { turnComplete: true } });
+
+    assert.strictEqual(calls.length, 1);
+    assert.deepStrictEqual(calls[0], { id: 'fc-1', name: 'end_call', args: {} });
+  });
+});

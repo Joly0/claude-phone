@@ -29,8 +29,10 @@ class GeminiLiveSession extends EventEmitter {
    * @param {string} [opts.model] - Gemini model identifier
    * @param {string} [opts.systemPrompt] - System instruction text
    * @param {string} [opts.voiceName] - Gemini voice name
+   * @param {Array<{name: string, description: string}>} [opts.tools] -
+   *   Function declarations the model may call (emitted as 'toolCall')
    */
-  constructor({ apiKey, model, systemPrompt, voiceName }) {
+  constructor({ apiKey, model, systemPrompt, voiceName, tools }) {
     super();
 
     if (!apiKey) {
@@ -41,6 +43,7 @@ class GeminiLiveSession extends EventEmitter {
     this.model = model || DEFAULT_MODEL;
     this.systemPrompt = systemPrompt || '';
     this.voiceName = voiceName || DEFAULT_VOICE;
+    this.tools = (tools && tools.length) ? tools : null;
 
     this.ws = null;
     this.connected = false;
@@ -108,6 +111,10 @@ class GeminiLiveSession extends EventEmitter {
           setupMsg.setup.systemInstruction = {
             parts: [{ text: this.systemPrompt }]
           };
+        }
+
+        if (this.tools) {
+          setupMsg.setup.tools = [{ functionDeclarations: this.tools }];
         }
 
         ws.send(JSON.stringify(setupMsg));
@@ -236,6 +243,30 @@ class GeminiLiveSession extends EventEmitter {
   }
 
   /**
+   * Reply to a model function call.
+   * @param {string} id - The function call id from the 'toolCall' event
+   * @param {string} name - The function name
+   * @param {Object} response - Result payload (e.g. { result: 'ok' })
+   */
+  sendToolResponse(id, name, response) {
+    if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    var msg = JSON.stringify({
+      toolResponse: {
+        functionResponses: [{ id: id, name: name, response: response }]
+      }
+    });
+
+    try {
+      this.ws.send(msg);
+    } catch (err) {
+      logger.warn('Gemini Live failed to send tool response', { error: err.message });
+    }
+  }
+
+  /**
    * Close the WebSocket connection cleanly.
    */
   close() {
@@ -267,6 +298,20 @@ class GeminiLiveSession extends EventEmitter {
    * @private
    */
   _handleMessage(data) {
+    // Function calls from the model (e.g. end_call)
+    if (data.toolCall && data.toolCall.functionCalls) {
+      var calls = data.toolCall.functionCalls;
+      for (var c = 0; c < calls.length; c++) {
+        logger.info('Gemini Live tool call', { name: calls[c].name, id: calls[c].id });
+        this.emit('toolCall', {
+          id: calls[c].id,
+          name: calls[c].name,
+          args: calls[c].args || {}
+        });
+      }
+      return;
+    }
+
     var serverContent = data.serverContent;
     if (!serverContent) {
       return;
