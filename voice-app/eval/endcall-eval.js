@@ -20,7 +20,7 @@
 var fs = require('fs');
 var path = require('path');
 var { GeminiLiveSession } = require('../lib/gemini-live-session');
-var { END_CALL_TOOL, END_CALL_PROMPT } = require('../lib/realtime-voice-loop');
+var { END_CALL_TOOL, END_CALL_PROMPT, END_CALL_NUDGE } = require('../lib/realtime-voice-loop');
 var prompts = require('../lib/prompts');
 
 var TURN_TIMEOUT_MS = 20000;
@@ -53,8 +53,20 @@ var SCENARIOS = [
     expectEndCall: true
   },
   {
+    name: 'silence nudge after decline (German)',
+    turns: ['Danke, das hilft mir sehr.', 'Nein danke, das war alles.'],
+    nudgeIfMissed: true,
+    expectEndCall: true
+  },
+  {
     name: 'control: ongoing question (German)',
     turns: ['Hallo!', 'Kannst du mir sagen, was du alles kannst?'],
+    expectEndCall: false
+  },
+  {
+    name: 'control: nudge must not hang up mid-conversation (German)',
+    turns: ['Hallo!', 'Kannst du mir sagen, was du alles kannst?'],
+    nudgeIfMissed: true,
     expectEndCall: false
   }
 ];
@@ -96,15 +108,28 @@ function runScenario(apiKey, systemPrompt, scenario) {
       resolve({ sawEndCall: sawEndCall, spoken: spoken.join(''), error: error || null });
     }
 
+    var nudged = false;
+
     function nextTurn() {
       if (turnTimer) clearTimeout(turnTimer);
       turnIndex++;
-      if (sawEndCall || turnIndex >= scenario.turns.length) {
+      if (sawEndCall || (turnIndex >= scenario.turns.length && (!scenario.nudgeIfMissed || nudged))) {
         finish();
         return;
       }
-      session.sendText(scenario.turns[turnIndex]);
+
+      if (turnIndex >= scenario.turns.length) {
+        // Simulate caller silence after the final turn: send the nudge the
+        // voice loop would send and give the model one more chance
+        nudged = true;
+        session.sendText(END_CALL_NUDGE);
+      } else {
+        session.sendText(scenario.turns[turnIndex]);
+      }
+
       turnTimer = setTimeout(function() {
+        // A silent (no turnComplete) reaction to the nudge is a valid outcome
+        if (nudged) { finish(); return; }
         finish('turn ' + (turnIndex + 1) + ' timed out');
       }, TURN_TIMEOUT_MS);
     }

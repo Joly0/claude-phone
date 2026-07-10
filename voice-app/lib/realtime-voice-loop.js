@@ -43,6 +43,18 @@ var END_CALL_TOOL = {
     'the same turn.'
 };
 
+// Sent as a quiet nudge when the caller stays silent after a model turn:
+// the model judges (in whatever language was spoken) whether the
+// conversation already ended and it merely forgot to call the tool
+var END_CALL_NUDGE =
+  '(Automatic check, the caller cannot hear this: the caller has been silent ' +
+  'for a moment. Review the last exchange. Call end_call ONLY if the caller ' +
+  'had clearly finished the conversation, for example by saying goodbye or ' +
+  'declining further help, AND you already said a farewell. In every other ' +
+  'case, for example if the caller asked something, is thinking, or might ' +
+  'still need help, you MUST do nothing: no tool call, no speaking. ' +
+  'If you are not sure, do nothing.)';
+
 // Appended to the system prompt whenever the end_call tool is available, so
 // hangup behavior does not depend on each operator's own prompt wording
 var END_CALL_PROMPT =
@@ -178,6 +190,32 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
   var endCallResolve = null;
   // Absolute time when the last audio byte sent to the fork finishes playing
   var playbackEndsAt = 0;
+
+  // Silence nudge: when the caller stays quiet after a model turn, ask the
+  // model to end the call if the conversation is already over
+  var nudgeSeconds = parseInt(process.env.HANGUP_NUDGE_SECONDS, 10);
+  if (isNaN(nudgeSeconds)) nudgeSeconds = 5;
+  var nudgeTimer = null;
+  var nudgeSent = false;
+
+  function clearSilenceNudge() {
+    if (nudgeTimer) {
+      clearTimeout(nudgeTimer);
+      nudgeTimer = null;
+    }
+  }
+
+  function armSilenceNudge() {
+    if (!allowHangup || !directMode || hangupRequested || nudgeSent || nudgeSeconds <= 0) return;
+    clearSilenceNudge();
+    nudgeTimer = setTimeout(function() {
+      nudgeTimer = null;
+      if (!callActive || hangupRequested) return;
+      nudgeSent = true;
+      logger.info('Caller silent after model turn, nudging for end_call', { callUuid: callUuid });
+      session.sendText(END_CALL_NUDGE);
+    }, nudgeSeconds * 1000);
+  }
 
   function doHangup() {
     if (!callActive) return;
@@ -442,6 +480,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
       // Instant barge-in: stop sending audio the moment caller speaks
       var bargeInTimer = null;
       audioSession.on('speechStart', function() {
+        clearSilenceNudge();
         if (state === STATE_SPEAKING && !greetingActive) {
           // Wait 300ms of sustained speech before flushing, avoids "hm", breaths, etc.
           bargeInTimer = setTimeout(function() {
@@ -481,6 +520,10 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
 
     // 5. Handle inputTranscription (what the user said) — debounce OpenClaw query
     session.on('inputTranscription', function(text) {
+      // Caller is speaking: a pending silence nudge no longer applies
+      nudgeSent = false;
+      clearSilenceNudge();
+
       if (state !== STATE_LISTENING) return;
 
       inputTranscriptBuffer += text;
@@ -560,6 +603,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
         // In LISTENING+directMode: the provider is answering directly, play its audio
         if (state === STATE_LISTENING && directMode) {
           state = STATE_SPEAKING;
+          clearSilenceNudge();
         }
         audioQueue.push(pcm);
         drainAudioQueue();
@@ -596,6 +640,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
           }
         }
         maybeFinishHangup();
+        armSilenceNudge();
 
       } else if (state === STATE_SPEAKING) {
         // Provider finished speaking — flush remaining audio
@@ -611,6 +656,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
         state = STATE_LISTENING;
         inputTranscriptBuffer = '';
         maybeFinishHangup();
+        armSilenceNudge();
       }
     });
 
@@ -618,6 +664,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
     session.on('interrupted', function() {
       logger.info('Barge-in detected', { callUuid: callUuid });
       clearAudioState();
+      clearSilenceNudge();
       bargedIn = true;
       if (queryDebounceTimer) {
         clearTimeout(queryDebounceTimer);
@@ -720,6 +767,8 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
       finishTimer = null;
     }
 
+    clearSilenceNudge();
+
     if (session) {
       try { session.close(); } catch (e) {}
     }
@@ -734,4 +783,4 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
   }
 }
 
-module.exports = { runRealtimeVoiceLoop, extractHangupMarker, END_CALL_TOOL, END_CALL_PROMPT };
+module.exports = { runRealtimeVoiceLoop, extractHangupMarker, END_CALL_TOOL, END_CALL_PROMPT, END_CALL_NUDGE };
