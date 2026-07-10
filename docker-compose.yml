@@ -36,9 +36,16 @@ services:
             echo "Detected public IP: $$PUBLIC_IP"
           fi
         fi
+        # Bind SIP to a specific address instead of all interfaces: on hosts
+        # where the same IP exists on several interfaces (e.g. Unraid's vhost
+        # shim for "Host access to custom networks"), wildcard binding tries
+        # the IP twice and dies with "Address already in use". Set
+        # DRACHTIO_BIND_IP=* to restore wildcard binding if you need it.
+        BIND_IP="$${DRACHTIO_BIND_IP:-$${EXTERNAL_IP:-*}}"
+        echo "Binding SIP to $$BIND_IP"
         exec drachtio \
-          --contact "sip:*:${DRACHTIO_SIP_PORT:-5060};transport=tcp,udp" \
-          --contact "sips:*:${DRACHTIO_TLS_PORT:-5061};transport=tls" \
+          --contact "sip:$$BIND_IP:${DRACHTIO_SIP_PORT:-5060};transport=tcp,udp" \
+          --contact "sips:$$BIND_IP:${DRACHTIO_TLS_PORT:-5061};transport=tls" \
           --cert-file /etc/drachtio/tls/server.crt \
           --key-file /etc/drachtio/tls/server.key \
           --chain-file /etc/drachtio/tls/chain.pem \
@@ -49,6 +56,8 @@ services:
     environment:
       - EXTERNAL_IP=${EXTERNAL_IP}
       - PUBLIC_IP=${PUBLIC_IP:-${EXTERNAL_IP}}
+      # Optional: SIP bind address (defaults to EXTERNAL_IP, use * for all interfaces)
+      - DRACHTIO_BIND_IP=${DRACHTIO_BIND_IP:-}
     volumes:
       # Persist auto-generated TLS cert across restarts
       - drachtio-tls:/etc/drachtio/tls
