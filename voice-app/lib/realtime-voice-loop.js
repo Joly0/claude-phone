@@ -161,6 +161,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
   // Assistant-initiated hangup (end_call tool / [HANGUP] relay marker)
   var allowHangup = !deviceConfig || deviceConfig.allowHangup !== false;
   var hangupRequested = false;
+  var hangupToolCalled = false;
   var hangupTimer = null;
 
   function doHangup() {
@@ -173,13 +174,16 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
     if (hangupRequested) return;
     hangupRequested = true;
     // Safety net: hang up even if the farewell never finishes cleanly
-    hangupTimer = setTimeout(doHangup, 10000);
+    hangupTimer = setTimeout(doHangup, 5000);
   }
 
   // Hang up once the farewell audio has fully drained to the caller
   function maybeFinishHangup() {
     if (!hangupRequested || !callActive) return;
-    if (state === STATE_SPEAKING) return;
+    // After an end_call tool call the turn never completes (the provider
+    // waits for the tool response round trip), so only wait for the state
+    // flip when the hangup came from a relay [HANGUP] marker
+    if (state === STATE_SPEAKING && !hangupToolCalled) return;
     if (audioQueue.length > 0 || audioDraining) return;
     if (hangupTimer) {
       clearTimeout(hangupTimer);
@@ -591,6 +595,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
         if (typeof session.sendToolResponse === 'function') {
           session.sendToolResponse(call.id, call.name, { result: 'ok, ending the call' });
         }
+        hangupToolCalled = true;
         requestHangup();
         maybeFinishHangup();
       } else {
