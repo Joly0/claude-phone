@@ -282,6 +282,8 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
   function clearAudioState() {
     playQueue.length = 0;
     audioAccumulator = Buffer.alloc(0);
+    playbackEndsAt = 0; // fork buffer is flushed on barge-in
+
     if (flushTimer) {
       clearTimeout(flushTimer);
       flushTimer = null;
@@ -502,9 +504,11 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
       }, 1500);
     });
 
-    // 6. Handle provider audio output, throttled to the real-time rate
-    var audioSendStart = null;
-    var audioBytesSent = 0;
+    // 6. Handle provider audio output, throttled to the real-time rate.
+    // playbackEndsAt is a buffer clock: each sent chunk extends it by its
+    // duration, restarting from now after an idle gap. This keeps pacing
+    // correct across turns (elapsed-time counters would think we are behind
+    // after every silent gap and dump whole turns into the fork buffer).
     var audioQueue = [];
     var audioDraining = false;
 
@@ -516,8 +520,7 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
         if (bargedIn || !callActive || audioQueue.length === 0) {
           audioDraining = false;
           audioQueue.length = 0;
-          audioSendStart = null;
-          audioBytesSent = 0;
+          if (bargedIn) playbackEndsAt = 0; // fork buffer was flushed
           maybeFinishHangup();
           return;
         }
@@ -526,15 +529,13 @@ async function runRealtimeVoiceLoop(provider, endpoint, dialog, callUuid, option
         if (audioSession) {
           audioSession.sendAudio(chunk);
         }
-        audioBytesSent += chunk.length;
 
-        if (!audioSendStart) audioSendStart = Date.now();
-        playbackEndsAt = audioSendStart + (audioBytesSent / bytesPerSecond) * 1000;
+        var now = Date.now();
+        var chunkMs = (chunk.length / bytesPerSecond) * 1000;
+        playbackEndsAt = Math.max(now, playbackEndsAt) + chunkMs;
 
-        // How far ahead are we? (bytes / bytesPerSecond = seconds of audio)
-        var elapsedMs = Date.now() - audioSendStart;
-        var sentMs = (audioBytesSent / bytesPerSecond) * 1000;
-        var aheadMs = sentMs - elapsedMs;
+        // How much unplayed audio is buffered at the fork?
+        var aheadMs = playbackEndsAt - now;
 
         if (aheadMs > 60 && audioQueue.length > 0) {
           // We're ahead of real-time, wait before sending more
