@@ -4,7 +4,7 @@
 
 # Claude Phone
 
-Voice interface for Claude Code via SIP/3CX. Call your AI, and your AI can call you.
+Voice interface for Claude Code via SIP. Call your AI, and your AI can call you. Works with 3CX or any SIP-compatible PBX, and can also register directly with a SIP trunk provider.
 
 ## What is this?
 
@@ -13,13 +13,28 @@ Claude Phone gives your Claude Code installation a phone number. You can:
 - **Inbound**: Call an extension and talk to Claude - run commands, check status, ask questions
 - **Outbound**: Your server can call YOU with alerts, then have a conversation about what to do
 
+## What's different in this fork
+
+This fork replaces the original ElevenLabs/Whisper pipeline with **Gemini Live** for real-time speech recognition and synthesis, and adds:
+
+- **Direct SIP trunk registration** - register with a carrier directly instead of (or in addition to) a local PBX:
+  - TLS transport support (`SIP_TRANSPORT=tls`) for providers that only accept SIP over TLS on port 5061; a self-signed certificate is generated automatically
+  - DNS SRV resolution with failover: registrar targets are looked up via SRV records (honoring priority and weight), cached until the TTL expires, and the next target is tried on errors or 503 responses
+  - Custom DNS server support (`DNS_SERVER`) for providers whose SRV records only resolve through the local router's DNS
+  - Split public/LAN addressing (`PUBLIC_IP` vs `EXTERNAL_IP`) for servers behind NAT
+  - Compatibility fixes for strict carriers: provisional 180 Ringing before answering, explicit codec offers (G722, PCMA, PCMU), and E.164 numbers with a leading plus
+- **Native 24kHz audio** streamed back over the bidirectional audio fork with real-time pacing, instead of downsampled 8kHz file playback
+- **Local voice activity barge-in**: interrupt the assistant mid-sentence without waiting for the server-side interruption signal
+- **Configurable voice prompts** via `voice-app/config/prompts.json` (see [Voice Prompts](#voice-prompts))
+- **Two conversation modes** with mid-call switching: *direct mode* (default, Gemini answers natively for sub-second responses) and *relay mode* (an AI backend provides the answers and Gemini speaks them)
+- **Claude API bridge fallback**: calls work out of the box with the bundled claude-api-server when no OpenClaw route is configured
+
 ## Prerequisites
 
 | Requirement | Where to Get It | Notes |
 |-------------|-----------------|-------|
-| **3CX Cloud Account** | [3cx.com](https://www.3cx.com/) | Free tier works |
-| **ElevenLabs API Key** | [elevenlabs.io](https://elevenlabs.io/) | For text-to-speech |
-| **OpenAI API Key** | [platform.openai.com](https://platform.openai.com/) | For Whisper speech-to-text |
+| **SIP provider** | [3cx.com](https://www.3cx.com/) or any SIP trunk | 3CX free tier works; direct trunk registration is also supported |
+| **Google API Key** | [aistudio.google.com](https://aistudio.google.com/) | For Gemini Live speech recognition and synthesis |
 | **Claude Code CLI** | [claude.ai/code](https://claude.ai/code) | Requires Claude Max subscription |
 
 ## Platform Support
@@ -194,9 +209,12 @@ claude-phone logs      # View logs
 | Problem | Likely Cause | Solution |
 |---------|--------------|----------|
 | Calls connect but no audio | Wrong external IP | Re-run `claude-phone setup`, verify LAN IP |
+| No audio when behind NAT | Public address not advertised | Set `PUBLIC_IP` in `.env` |
 | Extension not registering | 3CX SBC not running | Check 3CX admin panel |
+| Trunk registration rejected | Provider requires TLS | Set `SIP_TRANSPORT=tls` in `.env` |
+| SRV lookup fails for trunk | Records only on router DNS | Set `DNS_SERVER` to your router's IP |
 | "Sorry, something went wrong" | API server unreachable | Check `claude-phone status` |
-| Port conflict on startup | 3CX SBC using port 5060 | Setup auto-detects this; re-run setup |
+| Port conflict on startup | Another SIP service on 5060/5061 | Set `DRACHTIO_SIP_PORT` / `DRACHTIO_TLS_PORT` |
 
 See [Troubleshooting Guide](docs/TROUBLESHOOTING.md) for more.
 
@@ -208,6 +226,34 @@ Configuration is stored in `~/.claude-phone/config.json` with restricted permiss
 claude-phone config show    # View config (secrets redacted)
 claude-phone config path    # Show file location
 ```
+
+### SIP Trunk Registration
+
+For registering directly with a SIP trunk provider instead of a local PBX, these `.env` variables matter (see `.env.example` for the full list):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIP_TRANSPORT` | `udp` | Set to `tls` for providers that only accept registration over TLS (port 5061) |
+| `DNS_SERVER` | system DNS | DNS server for SRV lookups; set to your router's IP if the provider's SRV records only resolve through the local router's DNS |
+| `PUBLIC_IP` | `EXTERNAL_IP` | Public address to advertise in SIP signaling and SDP when the server sits behind NAT |
+| `DRACHTIO_SIP_PORT` | `5060` | SIP UDP/TCP listener port; change it if another SIP service uses 5060 |
+| `DRACHTIO_TLS_PORT` | `5061` | SIP TLS listener port |
+
+### Voice Prompts
+
+The assistant's system prompts and greeting can be customized without touching code:
+
+```bash
+cp voice-app/config/prompts.json.example voice-app/config/prompts.json
+```
+
+| Key | Purpose |
+|-----|---------|
+| `directModeSystemPrompt` | System prompt when Gemini answers natively (default mode) |
+| `relayModeSystemPrompt` | System prompt when Gemini only speaks responses from the AI backend |
+| `greeting` | Instruction for the greeting spoken when a call connects |
+
+`prompts.json` is gitignored, so personal or company-specific wording stays out of version control.
 
 ## Development
 
