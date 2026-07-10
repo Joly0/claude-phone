@@ -278,9 +278,8 @@ class GeminiLiveSession extends EventEmitter {
         var part = parts[i];
         if (part.inlineData && part.inlineData.data) {
           var pcm24 = Buffer.from(part.inlineData.data, 'base64');
-          var pcm8 = this._resamplePcm(pcm24, 24000, 8000);
-          logger.debug('Gemini Live audio chunk', { input: pcm24.length, output: pcm8.length });
-          this.emit('audio', pcm8);
+          logger.debug('Gemini Live audio chunk', { bytes: pcm24.length });
+          this.emit('audio', pcm24);
         }
       }
     }
@@ -343,21 +342,63 @@ class GeminiLiveSession extends EventEmitter {
     }
 
     var ratio = fromRate / toRate;
-    var outputLength = Math.floor(inputLength / ratio);
-    var outputSamples = new Int16Array(outputLength);
+    var cutoff = toRate / fromRate; // Nyquist ratio for anti-aliasing
 
-    for (var i = 0; i < outputLength; i++) {
-      var srcIndex = i * ratio;
-      var lower = Math.floor(srcIndex);
-      var upper = Math.min(lower + 1, inputLength - 1);
-      var fraction = srcIndex - lower;
-      outputSamples[i] = Math.round(
-        inputSamples[lower] + (inputSamples[upper] - inputSamples[lower]) * fraction
-      );
+    // Keep leftover samples from previous chunk for continuity
+    if (!this._resampleState) {
+      this._resampleState = { offset: 0, prevSamples: new Float64Array(0) };
     }
 
-    // Return a new Buffer backed by the Int16Array (little-endian on all Node.js platforms)
-    return Buffer.from(outputSamples.buffer, outputSamples.byteOffset, outputSamples.byteLength);
+    // Prepend previous chunk's tail for filter overlap
+    var overlapSize = 8; // samples of overlap
+    var prev = this._resampleState.prevSamples;
+    var totalLength = prev.length + inputLength;
+    var combined = new Float64Array(totalLength);
+    combined.set(prev, 0);
+    for (var k = 0; k < inputLength; k++) {
+      combined[prev.length + k] = inputSamples[k];
+    }
+
+    // Save tail for next chunk
+    var tailSize = Math.min(overlapSize, inputLength);
+    this._resampleState.prevSamples = new Float64Array(tailSize);
+    for (var t = 0; t < tailSize; t++) {
+      this._resampleState.prevSamples[t] = inputSamples[inputLength - tailSize + t];
+    }
+
+    // Resample with 4-point cubic interpolation + implicit anti-alias from averaging
+    var srcPos = this._resampleState.offset + prev.length;
+    var outputSamples = [];
+    var endPos = prev.length + inputLength - 2;
+
+    while (srcPos < endPos) {
+      var idx = Math.floor(srcPos);
+      var frac = srcPos - idx;
+
+      // Cubic Hermite interpolation (4 points)
+      var s0 = idx > 0 ? combined[idx - 1] : combined[idx];
+      var s1 = combined[idx];
+      var s2 = idx + 1 < totalLength ? combined[idx + 1] : s1;
+      var s3 = idx + 2 < totalLength ? combined[idx + 2] : s2;
+
+      var a = -0.5 * s0 + 1.5 * s1 - 1.5 * s2 + 0.5 * s3;
+      var b = s0 - 2.5 * s1 + 2.0 * s2 - 0.5 * s3;
+      var c = -0.5 * s0 + 0.5 * s2;
+      var d = s1;
+
+      var sample = a * frac * frac * frac + b * frac * frac + c * frac + d;
+      sample = Math.max(-32768, Math.min(32767, Math.round(sample)));
+      outputSamples.push(sample);
+      srcPos += ratio;
+    }
+
+    this._resampleState.offset = srcPos - endPos - 2;
+
+    var result = new Int16Array(outputSamples.length);
+    for (var i = 0; i < outputSamples.length; i++) {
+      result[i] = outputSamples[i];
+    }
+    return Buffer.from(result.buffer, result.byteOffset, result.byteLength);
   }
 
   /**

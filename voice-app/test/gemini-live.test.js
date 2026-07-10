@@ -138,10 +138,14 @@ describe('GeminiLiveSession', function () {
       var output = session._resamplePcm(input, 8000, 24000);
       var outputSamples = output.length / 2;
 
-      // Output should have 3x the number of input samples
+      // Output should have roughly 3x the number of input samples. The
+      // resampler is stateful and streaming: it withholds a few samples at
+      // the chunk edge until the next chunk arrives, so allow a small margin.
       var expectedSamples = Math.floor(inputSamples * 3);
-      assert.strictEqual(outputSamples, expectedSamples,
-        'Upsampled output should have ' + expectedSamples + ' samples, got ' + outputSamples);
+      assert.ok(outputSamples <= expectedSamples,
+        'Upsampled output should have at most ' + expectedSamples + ' samples, got ' + outputSamples);
+      assert.ok(outputSamples >= expectedSamples - 24,
+        'Upsampled output should have at least ' + (expectedSamples - 24) + ' samples, got ' + outputSamples);
       assert.ok(Buffer.isBuffer(output), 'Output should be a Buffer');
     });
   });

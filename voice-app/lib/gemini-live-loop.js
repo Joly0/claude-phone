@@ -114,6 +114,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
   var callActive = true;
   var flushTimer = null;
   var state = STATE_LISTENING;
+  var bargedIn = false;
   var inputTranscriptBuffer = '';
   var queryInProgress = false;
   var queryDebounceTimer = null;
@@ -136,12 +137,12 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
 
   async function flushAudio() {
     flushTimer = null;
-    if (audioAccumulator.length < 1600) return;
+    if (audioAccumulator.length < 960) return; // ~20ms at 24kHz
 
     var pcmData = audioAccumulator;
     audioAccumulator = Buffer.alloc(0);
 
-    var wavBuf = pcmToWav(pcmData, 8000);
+    var wavBuf = pcmToWav(pcmData, 24000);
     var url = await saveAndGetUrl(wavBuf, audioDir);
     playQueue.push(url);
     processPlayQueue();
@@ -150,13 +151,18 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
   async function processPlayQueue() {
     if (isPlaying || playQueue.length === 0 || !callActive) return;
     isPlaying = true;
-    while (playQueue.length > 0 && callActive) {
+    while (callActive) {
+      // Wait for at least one item, or break if nothing comes
+      if (playQueue.length === 0) {
+        // Wait briefly for more audio to arrive before stopping
+        await new Promise(function(r) { setTimeout(r, 100); });
+        if (playQueue.length === 0) break;
+      }
       var url = playQueue.shift();
       try {
         await endpoint.play(url);
       } catch (e) {
         if (!callActive) break;
-        logger.warn('Play failed', { callUuid: callUuid, error: e.message });
       }
     }
     isPlaying = false;
@@ -297,7 +303,12 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
     await endpoint.forkAudioStart({
       wsUrl: wsUrl,
       mixType: 'mono',
-      sampling: '16k'
+      sampling: '16k',
+      bidirectionalAudio: {
+        enabled: 'true',
+        streaming: 'true',
+        sampleRate: '24000'
+      }
     });
     forkRunning = true;
 
@@ -348,27 +359,70 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
       }, 1500);
     });
 
-    // 6. Handle Gemini audio output
-    session.on('audio', function(pcm8k) {
+    // 6. Handle Gemini audio output, throttled to the real-time rate
+    var audioSendStart = null;
+    var audioBytesSent = 0;
+    var audioQueue = [];
+    var audioDraining = false;
+
+    function drainAudioQueue() {
+      if (audioDraining || audioQueue.length === 0) return;
+      audioDraining = true;
+
+      function sendNext() {
+        if (bargedIn || !callActive || audioQueue.length === 0) {
+          audioDraining = false;
+          audioQueue.length = 0;
+          audioSendStart = null;
+          audioBytesSent = 0;
+          return;
+        }
+
+        var chunk = audioQueue.shift();
+        if (audioSession) {
+          audioSession.sendAudio(chunk);
+        }
+        audioBytesSent += chunk.length;
+
+        if (!audioSendStart) audioSendStart = Date.now();
+
+        // How far ahead are we? (bytes / 48000 = seconds at 24kHz 16-bit)
+        var elapsedMs = Date.now() - audioSendStart;
+        var sentMs = (audioBytesSent / 48000) * 1000;
+        var aheadMs = sentMs - elapsedMs;
+
+        if (aheadMs > 60 && audioQueue.length > 0) {
+          // We're ahead of real-time, wait before sending more
+          setTimeout(sendNext, aheadMs - 40);
+        } else {
+          // Send immediately
+          if (audioQueue.length > 0) {
+            setImmediate(sendNext);
+          } else {
+            audioDraining = false;
+          }
+        }
+      }
+
+      sendNext();
+    }
+
+    session.on('audio', function(pcm24k) {
       if (state === STATE_SPEAKING || (state === STATE_LISTENING && directMode)) {
         // In SPEAKING state: always play audio (relay response or direct response)
         // In LISTENING+directMode: Gemini is answering directly, play its audio
         if (state === STATE_LISTENING && directMode) {
           state = STATE_SPEAKING;
         }
-        audioAccumulator = Buffer.concat([audioAccumulator, pcm8k]);
-
-        if (flushTimer) {
-          clearTimeout(flushTimer);
-        }
-        var flushDelay = audioAccumulator.length >= 8000 ? 50 : 200;
-        flushTimer = setTimeout(function() { flushAudio(); }, flushDelay);
+        audioQueue.push(pcm24k);
+        drainAudioQueue();
       }
       // In LISTENING state (relay mode), discard all Gemini audio
     });
 
     // 7. Handle turnComplete
     session.on('turnComplete', function() {
+      bargedIn = false;
       if (state === STATE_LISTENING) {
         if (directMode) {
           // In direct mode, only check for mode switch back to relay
@@ -414,6 +468,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
     session.on('interrupted', function() {
       logger.info('Barge-in detected', { callUuid: callUuid });
       clearAudioState();
+      bargedIn = true;
       if (queryDebounceTimer) {
         clearTimeout(queryDebounceTimer);
         queryDebounceTimer = null;

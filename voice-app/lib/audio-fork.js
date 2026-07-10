@@ -73,6 +73,12 @@ class AudioForkSession extends EventEmitter {
     console.log('[AUDIO-DEBUG] AudioForkSession created for ' + callUuid);
   }
 
+  sendAudio(pcmData) {
+    if (this.ws && this.ws.readyState === 1) {
+      this.ws.send(pcmData);
+    }
+  }
+
   setCaptureEnabled(enabled) {
     const was = this.captureEnabled;
     this.captureEnabled = Boolean(enabled);
