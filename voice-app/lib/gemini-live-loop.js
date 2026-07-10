@@ -20,6 +20,7 @@ var GeminiLiveSession = require('./gemini-live-session').GeminiLiveSession;
 var openclawBridge = require('./openclaw-bridge');
 var openclawConfig = require('./openclaw-config');
 var claudeBridge = require('./claude-bridge');
+var prompts = require('./prompts');
 
 var MEDIA_HOST = process.env.MEDIA_HOST;
 var HTTP_PORT = process.env.HTTP_PORT || 3000;
@@ -116,7 +117,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
   var inputTranscriptBuffer = '';
   var queryInProgress = false;
   var queryDebounceTimer = null;
-  var directMode = false;
+  var directMode = true;
 
   var audioAccumulator = Buffer.alloc(0);
   var isPlaying = false;
@@ -127,10 +128,11 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
     logger.info('Call ended (dialog destroyed)', { callUuid: callUuid });
   };
 
-  var systemPrompt = 'You are a voice relay interface. You have two jobs:\n' +
-    '1. When you hear the user speak, do NOT respond. Stay completely silent. Do not generate any audio.\n' +
-    '2. When you receive a text message, speak it aloud naturally and warmly.\n' +
-    'Never answer questions yourself. Never add your own words. Only speak the exact text messages you receive.';
+  var cfg = prompts.load();
+  var systemPrompt = directMode
+    ? (cfg.directModeSystemPrompt || 'You are a helpful voice assistant. Answer questions naturally and conversationally. Be concise.')
+    : (cfg.relayModeSystemPrompt || 'You are a voice relay interface. Only speak the exact text messages you receive.');
+  var greetingText = cfg.greeting || 'Greet the user warmly and briefly.';
 
   async function flushAudio() {
     flushTimer = null;
@@ -243,7 +245,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
       voiceId: voiceId,
       callerExtension: callerExtension,
       backend: useClaudeBridge ? 'claude-api' : openclawRoute.url,
-      directMode: false
+      directMode: directMode
     });
 
     dialog.on('destroy', onDialogDestroy);
@@ -265,7 +267,7 @@ async function runGeminiLiveLoop(endpoint, dialog, callUuid, options) {
 
     // 2. Greeting or initial context via Gemini TTS
     if (!skipGreeting && callActive) {
-      session.sendText('Hello! How can I help you?');
+      session.sendText(directMode ? greetingText : 'Hello! How can I help you?');
       state = STATE_SPEAKING;
       logger.info('Greeting sent to Gemini', { callUuid: callUuid });
     }

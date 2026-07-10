@@ -55,3 +55,6 @@ voice-app/config/devices.json
 
 # OpenClaw config (contains tokens)
 openclaw.json
+
+# Voice prompts (may contain personal or company-specific wording)
+voice-app/config/prompts.json
